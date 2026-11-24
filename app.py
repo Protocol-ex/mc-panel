@@ -9,7 +9,7 @@ USERNAME = "admin"
 PASSWORD = "omega123"
 console_log = []
 
-# Если переменная BOT_URL не задана (например, на локальном ПК), используем localhost
+# Берем адрес бота из Render Environment
 BOT_URL = os.environ.get("BOT_URL", "http://127.0.0.1:3001").rstrip("/")
 
 LOGIN_HTML = """
@@ -69,11 +69,19 @@ CONSOLE_HTML = """
         header a.logout { color: #ff7b72; text-decoration: none; padding: 6px 14px; border: 1px solid rgba(255,123,114,0.4); border-radius: 6px; transition: 0.25s; }
         header a.logout:hover { background: rgba(255,123,114,0.15); border-color: #ff7b72; }
         .main { flex: 1; display: flex; gap: 18px; padding: 18px 28px; overflow: hidden; }
-        .sidebar { width: 210px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex-shrink: 0; }
-        .sidebar h3 { font-family: 'Segoe UI', sans-serif; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; color: #6e7681; margin-bottom: 4px; }
+        .sidebar { width: 230px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex-shrink: 0; }
+        .sidebar h3 { font-family: 'Segoe UI', sans-serif; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; color: #6e7681; margin-bottom: 4px; margin-top: 10px; }
         .quick-btn { background: rgba(22,27,34,0.8); border: 1px solid #30363d; border-radius: 8px; padding: 10px 12px; color: #c9d1d9; font-family: 'Consolas', monospace; font-size: 13px; cursor: pointer; text-align: left; transition: 0.2s; display: flex; align-items: center; gap: 8px; }
         .quick-btn:hover { border-color: #88ff00; background: rgba(136,255,0,0.08); transform: translateX(3px); color: #88ff00; }
         .quick-btn .icon { font-size: 15px; width: 20px; text-align: center; }
+        
+        /* Стили для формы сервера */
+        .server-form { display: flex; flex-direction: column; gap: 6px; background: rgba(22,27,34,0.6); padding: 10px; border-radius: 8px; border: 1px solid #30363d; }
+        .server-form input { padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; font-family: 'Consolas', monospace; font-size: 13px; outline: none; }
+        .server-form input:focus { border-color: #88ff00; }
+        .server-form button { padding: 8px; border-radius: 6px; border: none; background: #88ff00; color: #0a0f1a; font-weight: bold; cursor: pointer; font-size: 13px; margin-top: 4px; }
+        .server-form button:hover { filter: brightness(1.1); }
+
         .console-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         #console-output { flex: 1; overflow-y: auto; background: rgba(10,12,16,0.85); border: 1px solid #21262d; border-radius: 10px; padding: 18px; font-size: 14px; line-height: 1.7; scroll-behavior: smooth; }
         #console-output::-webkit-scrollbar { width: 8px; }
@@ -113,6 +121,13 @@ CONSOLE_HTML = """
             <button class="quick-btn" data-cmd="kick "><span class="icon">👢</span> kick &lt;ник&gt;</button>
             <button class="quick-btn" data-cmd="op "><span class="icon">⭐</span> op &lt;ник&gt;</button>
             <button class="quick-btn" data-cmd="say "><span class="icon">💬</span> say &lt;текст&gt;</button>
+
+            <h3>Настройки сервера</h3>
+            <div class="server-form">
+                <input type="text" id="srv-host" placeholder="IP или домен" value="Eternamc.mc-join.me">
+                <input type="number" id="srv-port" placeholder="Порт" value="25565">
+                <button id="btn-connect">Подключиться</button>
+            </div>
         </aside>
         <section class="console-area">
             <div id="console-output">
@@ -149,9 +164,7 @@ CONSOLE_HTML = """
             const cmd = input.value.trim();
             if (!cmd) return;
             input.value = '';
-
             appendLine(`<span class="prompt">></span> <span class="cmd">${cmd}</span>`);
-
             try {
                 const res = await fetch('/api/command', {
                     method: 'POST',
@@ -177,20 +190,46 @@ CONSOLE_HTML = """
             });
         });
 
+        // Кнопка подключения к серверу
+        document.getElementById('btn-connect').addEventListener('click', async () => {
+            const host = document.getElementById('srv-host').value.trim();
+            const port = document.getElementById('srv-port').value.trim();
+            if (!host) return alert('Введите IP сервера');
+            
+            appendLine(`<span class="system">Отправка команды переподключения на ${host}:${port}...</span>`);
+            
+            try {
+                const res = await fetch('/api/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ host, port })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    appendLine(`<span class="resp">Сервер изменен. Бот переподключается...</span>`);
+                    lastChatLength = -1; // Сбрасываем чат
+                    botOfflineReported = false;
+                } else {
+                    appendLine(`<span class="err">Ошибка: ${data.message}</span>`, true);
+                }
+            } catch (err) {
+                appendLine(`<span class="err">Ошибка сети: ${err.message}</span>`, true);
+            }
+        });
+
         async function fetchChat() {
             try {
                 const res = await fetch('/api/chat');
                 const messages = await res.json();
                 
                 if (messages.length === 0 && !botOfflineReported) {
-                    appendLine(`<span class="err">[ОШИБКА] Сайт не может получить данные от бота. Проверьте, запущен ли сервис mc-bot на Render.</span>`, true);
+                    appendLine(`<span class="err">[ОШИБКА] Сайт не может получить данные от бота. Проверьте сервис mc-bot.</span>`, true);
                     botOfflineReported = true;
                     return;
                 }
 
                 if (messages.length > lastChatLength) {
                     let newMessages = lastChatLength === -1 ? [] : messages.slice(lastChatLength);
-                    
                     newMessages.forEach(msg => {
                         if (msg.type === 'chat') {
                             appendLine(`<span class="chat-user">[Сервер]</span> <span class="chat-msg">${msg.text}</span>`);
@@ -203,7 +242,7 @@ CONSOLE_HTML = """
                 }
             } catch (err) {
                 if (!botOfflineReported) {
-                    appendLine(`<span class="err">[ОШИБКА] Бот не отвечает. Убедитесь, что сервис mc-bot запущен на Render.</span>`, true);
+                    appendLine(`<span class="err">[ОШИБКА] Бот не отвечает.</span>`, true);
                     botOfflineReported = true;
                 }
             }
@@ -251,12 +290,33 @@ def api_command():
         else:
             response_text = f"Ошибка бота: {resp.json().get('error', 'Бот не ответил')}"
     except requests.exceptions.ConnectionError:
-        response_text = "Ошибка: Бот не запущен или недоступен. Проверьте сервис mc-bot на Render."
+        response_text = "Ошибка: Бот не запущен или недоступен."
     except Exception as e:
         response_text = f"Ошибка: {str(e)}"
 
     console_log.append({"command": cmd, "response": response_text})
     return jsonify({"status": "ok", "response": response_text, "command": cmd})
+
+# ==== НОВЫЙ МАРШРУТ ДЛЯ СМЕНЫ СЕРВЕРА ====
+@app.route("/api/connect", methods=["POST"])
+def api_connect():
+    if not session.get("logged_in"):
+        return jsonify({"status": "error", "message": "Не авторизован"}), 401
+    data = request.get_json()
+    host = data.get("host", "").strip()
+    port = data.get("port", 25565)
+    
+    if not host:
+        return jsonify({"status": "error", "message": "Пустой IP"}), 400
+
+    try:
+        resp = requests.post(f"{BOT_URL}/connect", json={"host": host, "port": port}, timeout=10)
+        if resp.status_code == 200:
+            return jsonify({"status": "ok", "message": "Подключение инициировано"})
+        else:
+            return jsonify({"status": "error", "message": "Ошибка бота"}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/api/chat")
 def api_chat():

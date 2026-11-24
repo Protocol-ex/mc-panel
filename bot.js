@@ -7,7 +7,7 @@ const cors = require('cors');
 let currentConfig = {
     host: 'Eternamc.mc-join.me', // <--- Замените на ваш дефолтный IP
     port: 25565,
-    username: 'ТВОЙ_НИК',        // <--- Замените на ваш дефолтный ник
+    username: 'MechtaAdm',        // <--- Замените на ваш дефолтный ник
     auth: 'offline'
 };
 

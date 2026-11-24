@@ -2,7 +2,7 @@ from flask import Flask, request, redirect, url_for, session, jsonify, render_te
 import requests
 import os
 import sqlite3
-import random
+import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -17,33 +17,14 @@ DB_FILE = "database.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Таблица пользователей
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  username TEXT UNIQUE, 
-                  password TEXT, 
-                  role TEXT DEFAULT 'user')''')
-    # Таблица серверов
-    c.execute('''CREATE TABLE IF NOT EXISTS servers
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  user_id INTEGER, 
-                  name TEXT, 
-                  ip TEXT, 
-                  port INTEGER, 
-                  nickname TEXT)''')
-    # Таблица сообщений (чат поддержки)
-    c.execute('''CREATE TABLE IF NOT EXISTS messages
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  sender TEXT, 
-                  text TEXT, 
-                  time TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, role TEXT DEFAULT 'user')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, ip TEXT, port INTEGER, nickname TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT, text TEXT, time TEXT)''')
     
-    # Создаем админа по умолчанию (admin / omega123)
     c.execute("SELECT * FROM users WHERE username='admin'")
     if not c.fetchone():
         hashed_pw = generate_password_hash("omega123")
         c.execute("INSERT INTO users (username, password, role) VALUES ('admin', ?, 'admin')", (hashed_pw,))
-    
     conn.commit()
     conn.close()
 
@@ -91,8 +72,6 @@ LOGIN_HTML = """
             <input type="text" name="username" required autocomplete="off">
             <label>Пароль</label>
             <input type="password" name="password" required>
-            
-            <!-- Мини-игра Крестики-Нолики (Капча) -->
             <div class="ttt-wrapper">
                 <p>Пройдите капчу: соберите 3 в ряд (X)</p>
                 <div class="ttt-grid" id="ttt-grid">
@@ -107,24 +86,18 @@ LOGIN_HTML = """
                     <div class="ttt-cell" onclick="tttClick(this)"></div>
                 </div>
             </div>
-
-            <!-- Я не робот -->
             <label class="captcha-box" onclick="toggleCheck()">
                 <input type="checkbox" id="robot-check" name="robot_check" onclick="event.stopPropagation()">
                 <span>Я не робот</span>
             </label>
-
             <button type="submit">Войти</button>
         </form>
     </div>
-
     <script>
         let tttWon = false;
         function tttClick(cell) {
             if (tttWon || cell.innerText !== "") return;
-            cell.innerText = "X";
-            cell.classList.add("x");
-            checkTTTWin();
+            cell.innerText = "X"; cell.classList.add("x"); checkTTTWin();
         }
         function checkTTTWin() {
             const cells = document.querySelectorAll('.ttt-cell');
@@ -140,10 +113,7 @@ LOGIN_HTML = """
             document.getElementById('robot-check').checked = tttWon;
         }
         function toggleCheck() {
-            if (tttWon) {
-                const chk = document.getElementById('robot-check');
-                chk.checked = !chk.checked;
-            }
+            if (tttWon) { const chk = document.getElementById('robot-check'); chk.checked = !chk.checked; }
         }
     </script>
 </body>
@@ -167,7 +137,7 @@ DASHBOARD_HTML = """
         .logout:hover { background: rgba(255,123,114,0.15); border-color: #ff7b72; }
         
         .main { flex: 1; padding: 30px; overflow-y: auto; position: relative; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
         .server-card { background: rgba(22,27,34,0.8); border: 1px solid #30363d; border-radius: 12px; padding: 20px; position: relative; transition: 0.2s; }
         .server-card:hover { border-color: #88ff00; box-shadow: 0 0 15px rgba(136,255,0,0.1); }
         .server-card h3 { color: #fff; margin-bottom: 10px; }
@@ -175,11 +145,12 @@ DASHBOARD_HTML = """
         .server-card .nick { color: #ffb86c; margin-bottom: 15px; font-weight: bold; }
         .btn-connect { display: block; text-align: center; background: linear-gradient(90deg, #66cc00, #88ff00); color: #0a0f1a; text-decoration: none; padding: 10px; border-radius: 8px; font-weight: bold; transition: 0.2s; }
         .btn-connect:hover { filter: brightness(1.1); }
+        .btn-edit { position: absolute; top: 15px; right: 15px; background: none; border: 1px solid #30363d; color: #8b949e; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; transition: 0.2s; }
+        .btn-edit:hover { border-color: #88ff00; color: #88ff00; }
         
         .btn-add { position: fixed; bottom: 30px; left: 30px; background: #88ff00; color: #0a0f1a; border: none; padding: 15px 30px; border-radius: 50px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 15px rgba(136,255,0,0.4); transition: 0.2s; z-index: 100; }
         .btn-add:hover { transform: scale(1.05); }
 
-        /* Модальное окно */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 1000; }
         .modal-content { background: #161b22; border: 1px solid #30363d; padding: 30px; border-radius: 12px; width: 400px; text-align: center; }
         .modal-content h2 { margin-bottom: 20px; color: #88ff00; }
@@ -188,7 +159,6 @@ DASHBOARD_HTML = """
         .modal-content button { width: 100%; padding: 12px; background: #88ff00; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
         .modal-content .cancel { background: #30363d; color: #fff; }
 
-        /* Чат */
         .chat-btn { position: fixed; bottom: 30px; right: 30px; background: #79c0ff; color: #0a0f1a; border: none; padding: 15px; border-radius: 50%; width: 60px; height: 60px; font-size: 24px; cursor: pointer; box-shadow: 0 4px 15px rgba(121,192,255,0.4); z-index: 100; display: flex; justify-content: center; align-items: center; }
         .chat-window { position: fixed; bottom: 100px; right: 30px; width: 300px; height: 400px; background: #161b22; border: 1px solid #30363d; border-radius: 12px; display: none; flex-direction: column; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
         .chat-header { padding: 10px 15px; background: #0d1117; border-bottom: 1px solid #30363d; font-weight: bold; color: #79c0ff; border-radius: 12px 12px 0 0; display: flex; justify-content: space-between; }
@@ -208,34 +178,31 @@ DASHBOARD_HTML = """
         <div>
             <span class="user-info">Вы вошли как <b>{{ user }}</b> ({{ role }})</span>
             {% if role == 'admin' %}
-                <a href="{{ url_for('admin') }}" style="color:#88ff00; margin-left: 15px; text-decoration: none;">Админ-консоль</a>
+                <a href="{{ url_for('admin') }}" style="color:#88ff00; margin-left: 15px; text-decoration: none;">Админ-панель</a>
             {% endif %}
             <a class="logout" href="{{ url_for('logout') }}">Выйти</a>
         </div>
     </header>
 
     <div class="main">
-        <div class="grid" id="servers-grid">
-            <!-- Сюда вставляются сервера -->
-        </div>
+        <div class="grid" id="servers-grid"></div>
     </div>
 
     <button class="btn-add" onclick="openModal()">+ Создать консоль</button>
 
-    <!-- Модальное окно -->
     <div class="modal" id="add-modal">
         <div class="modal-content">
-            <h2>Новый сервер</h2>
+            <h2 id="modal-title">Новый сервер</h2>
+            <input type="hidden" id="edit-id">
             <input type="text" id="m-name" placeholder="Название (например, Анархия)" required>
             <input type="text" id="m-ip" placeholder="IP сервера" required>
             <input type="number" id="m-port" placeholder="Порт" value="25565" required>
             <input type="text" id="m-nick" placeholder="Ник для бота" required>
-            <button onclick="addServer()">Добавить</button>
+            <button onclick="saveServer()">Сохранить</button>
             <button class="cancel" onclick="closeModal()">Отмена</button>
         </div>
     </div>
 
-    <!-- Чат поддержки -->
     <button class="chat-btn" onclick="toggleChat()">💬</button>
     <div class="chat-window" id="chat-window">
         <div class="chat-header">Чат поддержки <span onclick="toggleChat()">✖</span></div>
@@ -249,11 +216,26 @@ DASHBOARD_HTML = """
     <script>
         const userRole = "{{ role }}";
         
-        // ==== Модальное окно ====
-        function openModal() { document.getElementById('add-modal').style.display = 'flex'; }
+        function openModal(server = null) {
+            document.getElementById('add-modal').style.display = 'flex';
+            if (server) {
+                document.getElementById('modal-title').innerText = "Редактировать сервер";
+                document.getElementById('edit-id').value = server.id;
+                document.getElementById('m-name').value = server.name;
+                document.getElementById('m-ip').value = server.ip;
+                document.getElementById('m-port').value = server.port;
+                document.getElementById('m-nick').value = server.nickname;
+            } else {
+                document.getElementById('modal-title').innerText = "Новый сервер";
+                document.getElementById('edit-id').value = "";
+                document.getElementById('m-name').value = "";
+                document.getElementById('m-ip').value = "";
+                document.getElementById('m-port').value = "25565";
+                document.getElementById('m-nick').value = "";
+            }
+        }
         function closeModal() { document.getElementById('add-modal').style.display = 'none'; }
 
-        // ==== Загрузка серверов ====
         async function loadServers() {
             const res = await fetch('/api/get_servers');
             const servers = await res.json();
@@ -269,6 +251,7 @@ DASHBOARD_HTML = """
                 const card = document.createElement('div');
                 card.className = 'server-card';
                 card.innerHTML = `
+                    <button class="btn-edit" onclick='openModal(${JSON.stringify(s)})'>✎ Ред.</button>
                     <h3>${s.name}</h3>
                     <p>IP: ${s.ip}:${s.port}</p>
                     <p class="nick">Ник: ${s.nickname}</p>
@@ -278,7 +261,8 @@ DASHBOARD_HTML = """
             });
         }
 
-        async function addServer() {
+        async function saveServer() {
+            const id = document.getElementById('edit-id').value;
             const name = document.getElementById('m-name').value.trim();
             const ip = document.getElementById('m-ip').value.trim();
             const port = document.getElementById('m-port').value.trim();
@@ -286,20 +270,20 @@ DASHBOARD_HTML = """
             
             if (!name || !ip || !port || !nick) return alert('Заполните все поля');
             
-            const res = await fetch('/api/add_server', {
+            const url = id ? '/api/edit_server' : '/api/add_server';
+            const res = await fetch(url, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name, ip, port, nickname: nick})
+                body: JSON.stringify({id, name, ip, port, nickname: nick})
             });
             if (res.ok) {
                 closeModal();
                 loadServers();
             } else {
-                alert('Ошибка при добавлении');
+                alert('Ошибка сохранения');
             }
         }
 
-        // ==== Чат поддержки ====
         function toggleChat() {
             const cw = document.getElementById('chat-window');
             cw.style.display = cw.style.display === 'flex' ? 'none' : 'flex';
@@ -313,7 +297,6 @@ DASHBOARD_HTML = """
             container.innerHTML = '';
             msgs.forEach(m => {
                 const div = document.createElement('div');
-                // Если отправитель админ - рисуем слева, если я - справа
                 div.className = `msg ${m.sender === '{{ user }}' ? 'my' : 'other'}`;
                 div.innerHTML = `<b>${m.sender}:</b><br>${m.text}`;
                 container.appendChild(div);
@@ -332,13 +315,7 @@ DASHBOARD_HTML = """
             });
             loadChat();
         }
-
-        // Поллинг чата, если окно открыто
-        setInterval(() => {
-            if (document.getElementById('chat-window').style.display === 'flex') loadChat();
-        }, 3000);
-
-        // Инициализация
+        setInterval(() => { if (document.getElementById('chat-window').style.display === 'flex') loadChat(); }, 3000);
         loadServers();
     </script>
 </body>
@@ -408,7 +385,6 @@ CONSOLE_HTML = """
         </form>
     </div>
     <script>
-        const serverId = {{ server.id }};
         const output = document.getElementById('console-output');
         const form = document.getElementById('cmd-form');
         const input = document.getElementById('cmd-input');
@@ -428,7 +404,6 @@ CONSOLE_HTML = """
             output.scrollTop = output.scrollHeight;
         }
 
-        // При загрузке страницы сразу даем команду боту подключиться к нужному серверу
         window.onload = async () => {
             appendLine(`<span class="system">Отправка запроса боту на подключение к {{ server.ip }}:{{ server.port }} под ником {{ server.nickname }}...</span>`);
             await fetch('/api/connect', {
@@ -466,7 +441,7 @@ CONSOLE_HTML = """
                 const res = await fetch('/api/chat');
                 const messages = await res.json();
                 if (messages.length === 0 && !botOfflineReported) {
-                    appendLine(`<span class="err">[ОШИБКА] Сайт не может получить данные от бота. Проверьте сервис mc-bot.</span>`, true);
+                    appendLine(`<span class="err">[ОШИБКА] Сайт не может получить данные от бота.</span>`, true);
                     botOfflineReported = true;
                     return;
                 }
@@ -495,13 +470,14 @@ ADMIN_HTML = """
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Админ-консоль — HypeMC Panel</title>
+    <title>Админ-панель — HypeMC Panel</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { height: 100vh; display: flex; flex-direction: column; font-family: 'Segoe UI', sans-serif; background: #0a0c10; color: #c9d1d9; }
         header { display: flex; justify-content: space-between; align-items: center; padding: 14px 28px; background: rgba(22,27,34,0.85); border-bottom: 1px solid rgba(255,123,114,0.4); }
         h1 { font-size: 22px; color: #ff7b72; }
-        .back-btn { color: #8b949e; text-decoration: none; font-size: 14px; margin-right: 15px; padding: 6px 12px; border: 1px solid #30363d; border-radius: 6px; }
+        .back-btn { color: #8b949e; text-decoration: none; font-size: 14px; margin-right: 15px; padding: 6px 12px; border: 1px solid #30363d; border-radius: 6px; transition: 0.2s; }
+        .back-btn:hover { border-color: #88ff00; color: #88ff00; }
         
         .container { padding: 30px; display: flex; gap: 30px; }
         .panel { flex: 1; background: rgba(22,27,34,0.8); border: 1px solid #30363d; border-radius: 12px; padding: 20px; }
@@ -517,26 +493,24 @@ ADMIN_HTML = """
         .add-form button { padding: 10px 20px; background: #88ff00; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
         
         .btn-del { background: #ff7b72; color: #000; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        
         .chat-msg { padding: 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 10px; font-size: 14px; }
     </style>
 </head>
 <body>
     <header>
         <div style="display:flex; align-items:center;">
-            <a href="/dashboard" class="back-btn">← Назад</a>
+            <a href="/dashboard" class="back-btn">← Назад на главную</a>
             <h1>Админ-панель</h1>
         </div>
     </header>
 
     <div class="container">
-        <!-- Управление пользователями -->
         <div class="panel">
             <h2>Пользователи (Белый список)</h2>
             <div class="add-form">
                 <input type="text" id="new-user" placeholder="Логин">
                 <input type="password" id="new-pass" placeholder="Пароль">
-                <button onclick="addUser()">Добавить</button>
+                <button onclick="addUser()">Создать</button>
             </div>
             <table id="users-table">
                 <thead>
@@ -546,12 +520,9 @@ ADMIN_HTML = """
             </table>
         </div>
 
-        <!-- Сообщения из чата -->
         <div class="panel">
-            <h2>Чат поддержки</h2>
-            <div id="admin-chat-list" style="max-height: 400px; overflow-y: auto;">
-                <!-- Сюда грузятся сообщения -->
-            </div>
+            <h2>Чат поддержки (все сообщения)</h2>
+            <div id="admin-chat-list" style="max-height: 500px; overflow-y: auto;"></div>
         </div>
     </div>
 
@@ -577,18 +548,22 @@ ADMIN_HTML = """
             const u = document.getElementById('new-user').value.trim();
             const p = document.getElementById('new-pass').value.trim();
             if (!u || !p) return alert('Введите логин и пароль');
-            await fetch('/api/admin/add_user', {
+            const res = await fetch('/api/admin/add_user', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username: u, password: p})
             });
-            document.getElementById('new-user').value = '';
-            document.getElementById('new-pass').value = '';
-            loadUsers();
+            if (res.ok) {
+                document.getElementById('new-user').value = '';
+                document.getElementById('new-pass').value = '';
+                loadUsers();
+            } else {
+                alert('Ошибка: возможно, такой логин уже существует');
+            }
         }
 
         async function delUser(id) {
-            if (!confirm('Удалить этого пользователя?')) return;
+            if (!confirm('Удалить этого пользователя и все его сервера?')) return;
             await fetch('/api/admin/del_user', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -627,7 +602,7 @@ def login():
         robot = request.form.get("robot_check")
         
         if not robot:
-            error = "Вы не робот? Подтвердите."
+            error = "Пройдите капчу (крестики-нолики) и поставьте галочку."
         else:
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
@@ -658,7 +633,6 @@ def server_console(server_id):
     
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Проверяем, что сервер принадлежит текущему юзеру (или юзер админ)
     if session["role"] == 'admin':
         c.execute("SELECT id, name, ip, port, nickname FROM servers WHERE id=?", (server_id,))
     else:
@@ -715,6 +689,28 @@ def api_add_server():
     conn.close()
     return jsonify({"status": "ok"})
 
+# ==== НОВЫЙ МАРШРУТ: Редактирование сервера ====
+@app.route("/api/edit_server", methods=["POST"])
+def api_edit_server():
+    if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
+    data = request.get_json()
+    sid = data.get("id")
+    
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Проверяем права
+    if session["role"] != 'admin':
+        c.execute("SELECT id FROM servers WHERE id=? AND user_id=(SELECT id FROM users WHERE username=?)", (sid, session["user"]))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({"error": "access denied"}), 403
+
+    c.execute("UPDATE servers SET name=?, ip=?, port=?, nickname=? WHERE id=?", 
+              (data['name'], data['ip'], data['port'], data['nickname'], sid))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
 @app.route("/api/get_chat")
 def api_get_chat():
     if not session.get("logged_in"): return jsonify([])
@@ -730,7 +726,6 @@ def api_send_chat():
     if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
     text = request.get_json().get("text")
     if not text: return jsonify({"error": "empty"}), 400
-    import datetime
     now = datetime.datetime.now().strftime("%H:%M")
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -739,7 +734,6 @@ def api_send_chat():
     conn.close()
     return jsonify({"status": "ok"})
 
-# API для админа
 @app.route("/api/admin/get_users")
 def api_admin_get_users():
     if session.get("role") != 'admin': return jsonify([]), 403
@@ -777,12 +771,11 @@ def api_admin_del_user():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("DELETE FROM users WHERE id=?", (uid,))
-    c.execute("DELETE FROM servers WHERE user_id=?", (uid,)) # Каскадное удаление серверов
+    c.execute("DELETE FROM servers WHERE user_id=?", (uid,))
     conn.commit()
     conn.close()
     return jsonify({"status": "ok"})
 
-# Прокси-запросы к боту
 @app.route("/api/command", methods=["POST"])
 def api_command():
     if not session.get("logged_in"): return jsonify({"status": "error", "message": "Не авторизован"}), 401

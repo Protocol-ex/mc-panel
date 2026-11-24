@@ -107,7 +107,6 @@ CHAT_HTML = """
 </div>
 
 <script>
-    // ИИ Логика
     function askAI() {
         const inp = document.getElementById('inp-ai'); const text = inp.value.trim().toLowerCase(); if (!text) return; inp.value = '';
         const container = document.getElementById('msgs-ai');
@@ -140,7 +139,6 @@ CHAT_HTML = """
         else { ai.style.display = ai.style.display === 'flex' ? 'none' : 'flex'; sup.style.display = 'none'; }
     }
 
-    // Поддержка Логика
     async function loadSupportChat() {
         try {
             const res = await fetch('/api/get_chat', { cache: 'no-store' });
@@ -173,9 +171,7 @@ CHAT_HTML = """
         loadSupportChat();
     }
 
-    // Загружаем чат при старте страницы, чтобы история не пропадала
     document.addEventListener("DOMContentLoaded", () => { loadSupportChat(); });
-    // Автоматическое обновление чата каждые 2 секунды, чтобы ответы приходили сами
     setInterval(() => { if(document.getElementById('chat-support').style.display === 'flex') loadSupportChat(); }, 2000);
 </script>
 """
@@ -509,27 +505,29 @@ def server_console(server_id):
     server = c.fetchone(); conn.close()
     if not server: return "Сервер не найден", 403
     
+    # Обратите внимание на CSS: html, body заблокированы, а #console-output скроллится
     return render_template_string(f"""
     <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Консоль</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ height: 100vh; display: flex; flex-direction: column; font-family: 'Consolas', monospace; background: #0a0c10; color: #c9d1d9; overflow: hidden; }}
-        header {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; }}
+        html, body {{ height: 100%; overflow: hidden; }} /* Фиксируем всю страницу */
+        body {{ display: flex; flex-direction: column; font-family: 'Consolas', monospace; background: #0a0c10; color: #c9d1d9; }}
+        header {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; flex-shrink: 0; }}
         .back-btn {{ color: #8b949e; text-decoration: none; margin-right: 15px; padding: 6px 10px; border: 1px solid #30363d; border-radius: 6px; font-size: 13px; }}
         .back-btn:hover {{ border-color: #88ff00; color: #88ff00; }}
         .btn-action {{ background: none; border: 1px solid #ff7b72; color: #ff7b72; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: 10px; font-size: 12px; font-weight: bold; transition: 0.2s; }}
         .btn-action:hover {{ background: rgba(255,123,114,0.1); }}
         .btn-pause {{ border-color: #79c0ff; color: #79c0ff; }}
         .btn-pause:hover {{ background: rgba(121,192,255,0.1); }}
-        .btn-pause.muted {{ border-color: #88ff00; color: #88ff00; background: rgba(136,255,0,0.1); }}
-        .main {{ flex: 1; padding: 15px; display: flex; flex-direction: column; }}
-        #console-output {{ flex: 1; overflow-y: auto; background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 15px; font-size: 13px; line-height: 1.6; }}
+        .btn-pause.stopped {{ border-color: #88ff00; color: #88ff00; background: rgba(136,255,0,0.1); }}
+        .main {{ flex: 1; padding: 15px; display: flex; flex-direction: column; overflow: hidden; }}
+        #console-output {{ flex: 1; overflow-y: auto; background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 15px; font-size: 13px; line-height: 1.6; scroll-behavior: smooth; }}
         .line {{ margin-bottom: 5px; word-break: break-all; }}
         .line .time {{ color: #484f58; font-size: 11px; margin-right: 6px; }}
         .line .system {{ color: #8b949e; font-style: italic; }}
         .line .chat-user {{ color: #ffb86c; font-weight: bold; }}
         .line .chat-msg {{ color: #f8f8f2; }}
-        .input-row {{ display: flex; margin-top: 10px; gap: 8px; }}
+        .input-row {{ display: flex; margin-top: 10px; gap: 8px; flex-shrink: 0; }}
         #cmd-input {{ flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #30363d; background: #161b22; color: #fff; outline: none; }}
         #cmd-input:focus {{ border-color: #88ff00; }}
         #send-btn {{ padding: 0 20px; background: #88ff00; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }}
@@ -540,7 +538,7 @@ def server_console(server_id):
                 <a href="/dashboard" class="back-btn">← Назад</a>
                 <b style="color:#fff;">Консоль: {server[1]}</b>
                 <button class="btn-action" onclick="forceReconnect()">🔄 Перезайти</button>
-                <button class="btn-action btn-pause" id="btn-mute" onclick="toggleMute()">⏸ Пауза</button>
+                <button class="btn-action btn-pause" id="btn-toggle" onclick="toggleBot()">⏸ Стоп</button>
             </div>
             <div style="font-size: 12px; color: #8b949e;"><span style="color:#88ff00;">{server[2]}:{server[3]}</span> | <span style="color:#ffb86c;">{server[4]}</span></div>
         </header>
@@ -556,42 +554,49 @@ def server_console(server_id):
             const form = document.getElementById('cmd-form');
             const input = document.getElementById('cmd-input');
             let lastChatLength = -1;
-            let isMuted = false;
-            let mutedMessages = [];
+            let isStopped = false;
 
             function now() {{ return new Date().toLocaleTimeString('ru-RU'); }}
             
             function appendLine(html) {{
-                if (isMuted) {{
-                    mutedMessages.push(html);
-                }} else {{
-                    const isScrolledToBottom = output.scrollHeight - output.clientHeight <= output.scrollTop + 50;
-                    output.innerHTML += `<div class="line"><span class="time">${{now()}}</span> ${{html}}</div>`;
-                    if (isScrolledToBottom) {{
-                        output.scrollTop = output.scrollHeight;
-                    }}
-                }}
-            }}
-
-            function toggleMute() {{
-                isMuted = !isMuted;
-                const btn = document.getElementById('btn-mute');
-                if (isMuted) {{
-                    btn.innerHTML = "▶ Продолжить";
-                    btn.classList.add('muted');
-                }} else {{
-                    btn.innerHTML = "⏸ Пауза";
-                    btn.classList.remove('muted');
-                    mutedMessages.forEach(msg => {{
-                        output.innerHTML += `<div class="line"><span class="time">${{now()}}</span> ${{msg}}</div>`;
-                    }});
-                    mutedMessages = [];
+                if (isStopped) return; // Если бот остановлен, не выводим новые сообщения
+                
+                const isScrolledToBottom = output.scrollHeight - output.clientHeight <= output.scrollTop + 50;
+                output.innerHTML += `<div class="line"><span class="time">${{now()}}</span> ${{html}}</div>`;
+                
+                if (isScrolledToBottom) {{
                     output.scrollTop = output.scrollHeight;
                 }}
             }}
 
-            window.onload = async () => {{ await fetch('/api/connect', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ host: "{server[2]}", port: "{server[3]}", username: "{server[4]}" }}) }}); }};
-            async function forceReconnect() {{ appendLine(`<span class="system">Перезапуск...</span>`); await fetch('/api/reconnect', {{ method: 'POST' }}); }}
+            async function toggleBot() {{
+                const btn = document.getElementById('btn-toggle');
+                if (!isStopped) {{
+                    // Останавливаем
+                    isStopped = true;
+                    btn.innerHTML = "▶ Запустить";
+                    btn.classList.add('stopped');
+                    appendLine(`<span class="system">Бот принудительно отключен от сервера.</span>`);
+                    await fetch('/api/stop', {{ method: 'POST' }});
+                }} else {{
+                    // Запускаем
+                    isStopped = false;
+                    btn.innerHTML = "⏸ Стоп";
+                    btn.classList.remove('stopped');
+                    appendLine(`<span class="system">Перезапуск бота...</span>`);
+                    lastChatLength = -1; // Сбрасываем кэш чата
+                    await fetch('/api/connect', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ host: "{server[2]}", port: "{server[3]}", username: "{server[4]}" }}) }});
+                }}
+            }}
+
+            window.onload = async () => {{ 
+                await fetch('/api/connect', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ host: "{server[2]}", port: "{server[3]}", username: "{server[4]}" }}) }}); 
+            }};
+
+            async function forceReconnect() {{ 
+                appendLine(`<span class="system">Принудительный перезапуск...</span>`); 
+                await fetch('/api/reconnect', {{ method: 'POST' }}); 
+            }}
             
             form.addEventListener('submit', async (e) => {{
                 e.preventDefault(); const cmd = input.value.trim(); if (!cmd) return;
@@ -600,6 +605,7 @@ def server_console(server_id):
             }});
 
             setInterval(async () => {{
+                if (isStopped) return; // Не запрашиваем логи, если стоит стоп
                 try {{
                     const res = await fetch('/api/chat', {{ cache: 'no-store' }}); const messages = await res.json();
                     if (messages.length > lastChatLength) {{
@@ -773,6 +779,13 @@ def api_connect():
 def api_reconnect():
     if not session.get("logged_in"): return jsonify({"status": "error"}), 401
     try: requests.post(f"{BOT_URL}/reconnect", timeout=10)
+    except: pass
+    return jsonify({"status": "ok"})
+
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
+    try: requests.post(f"{BOT_URL}/stop", timeout=10)
     except: pass
     return jsonify({"status": "ok"})
 

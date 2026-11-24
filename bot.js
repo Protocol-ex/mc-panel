@@ -6,9 +6,9 @@ const cors = require('cors');
 let currentConfig = {
     host: 'mc.hypemc.pro',
     port: 25565,
-    username: 'MechtaAdm',
+    username: 'ТВОЙ_НИК',
     auth: 'offline',
-    version: '1.21.11' // Указана нужная версия
+    version: false // Автоопределение
 };
 
 let bot = null;
@@ -55,10 +55,12 @@ app.listen(process.env.PORT || 3001, () => { console.log('=== БОТ ЗАПУЩ�
 function createBot() {
     if (bot) { try { bot.quit(); } catch(e){} }
     console.log(`[BOT] Подключение к ${currentConfig.host}:${currentConfig.port}...`);
+    
     bot = mineflayer.createBot(currentConfig);
     
     bot.on('spawn', () => {
-        chatLog.push({ type: 'system', text: `Бот ${bot.username} зашел на сервер (1.21.11)` });
+        console.log(`[BOT] ЗАШЕЛ НА СЕРВЕР как ${bot.username}`);
+        chatLog.push({ type: 'system', text: `Бот ${bot.username} зашел на сервер` });
     });
     
     bot.on('messagestr', (message) => {
@@ -67,8 +69,21 @@ function createBot() {
         chatLog.push({ type: 'chat', username: 'Сервер', text: message });
     });
     
-    bot.on('error', (err) => { chatLog.push({ type: 'system', text: `Ошибка: ${err.message}` }); });
-    bot.on('kicked', (reason) => { chatLog.push({ type: 'system', text: `Кикнут: ${reason}` }); });
-    bot.on('end', () => { setTimeout(createBot, 10000); });
+    bot.on('error', (err) => { 
+        console.log(`[BOT] Ошибка: ${err.message}`);
+        chatLog.push({ type: 'system', text: `Ошибка: ${err.message}` }); 
+    });
+    
+    bot.on('kicked', (reason) => { 
+        let reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : reason;
+        console.log(`[BOT] КИКНУТ: ${reasonStr}`);
+        chatLog.push({ type: 'system', text: `КИКНУТ: ${reasonStr}` }); 
+    });
+    
+    bot.on('end', () => {
+        chatLog.push({ type: 'system', text: `Бот отключен. Перезаход через 10 сек...` });
+        setTimeout(createBot, 10000);
+    });
 }
+
 createBot();

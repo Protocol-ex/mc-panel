@@ -10,8 +10,6 @@ app.secret_key = "OmegaProtocol_Super_Secret_Key_2026"
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
 
 BOT_URL = os.environ.get("BOT_URL", "http://127.0.0.1:3001").rstrip("/")
-
-# ВАЖНО: Путь к базе данных. Если Render перезапускается, база сохраняется в той же папке.
 DB_FILE = "database.db"
 
 def init_db():
@@ -31,24 +29,10 @@ def init_db():
         c.execute("INSERT INTO services (name, price, description) VALUES ('Базовый', 'Бесплатно', '1 консоль, стандартная поддержка')")
         c.execute("INSERT INTO services (name, price, description) VALUES ('Премиум', '149 руб/мес', '5 консолей, приоритетная поддержка')")
         c.execute("INSERT INTO services (name, price, description) VALUES ('Бизнес', '399 руб/мес', 'Безлимит консолей, выделенный менеджер')")
-    conn.commit()
-    conn.close()
-
-# Создаем таблицы только при первом запуске, если файла нет
-if not os.path.exists(DB_FILE):
-    init_db()
-    
-# Проверка и обновление структуры (на случай старых версий)
-def update_db_schema():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try: c.execute("ALTER TABLE messages ADD COLUMN is_admin INTEGER DEFAULT 0")
-    except: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN server_limit INTEGER DEFAULT 1")
-    except: pass
     conn.commit(); conn.close()
 
-update_db_schema()
+if not os.path.exists(DB_FILE):
+    init_db()
 
 @app.before_request
 def block_direct_url_access():
@@ -111,7 +95,7 @@ CHAT_HTML = """
 <button class="chat-btn" onclick="toggleChat('support')">💬</button>
 <div class="chat-window" id="chat-support">
     <div class="chat-header support">Поддержка <span onclick="toggleChat('support')">✖</span></div>
-    <div class="chat-messages" id="msgs-support"><p style="color:#8b949e; font-size: 13px;">Напишите нам. Ответ придет в ближайшее время.</p></div>
+    <div class="chat-messages" id="msgs-support"></div>
     <div class="chat-input"><input type="text" id="inp-support" placeholder="Сообщение..." onkeypress="if(event.key==='Enter') sendMsg()"><button class="btn-sup" onclick="sendMsg()">></button></div>
 </div>
 
@@ -123,6 +107,7 @@ CHAT_HTML = """
 </div>
 
 <script>
+    // ИИ Логика
     function askAI() {
         const inp = document.getElementById('inp-ai'); const text = inp.value.trim().toLowerCase(); if (!text) return; inp.value = '';
         const container = document.getElementById('msgs-ai');
@@ -144,18 +129,54 @@ CHAT_HTML = """
         }, 400);
         container.scrollTop = container.scrollHeight;
     }
+    
     function toggleChat(type) {
         const sup = document.getElementById('chat-support'); const ai = document.getElementById('chat-ai');
-        if (type === 'support') { sup.style.display = sup.style.display === 'flex' ? 'none' : 'flex'; ai.style.display = 'none'; }
+        if (type === 'support') { 
+            sup.style.display = sup.style.display === 'flex' ? 'none' : 'flex'; 
+            ai.style.display = 'none'; 
+            if(sup.style.display === 'flex') loadSupportChat(); 
+        }
         else { ai.style.display = ai.style.display === 'flex' ? 'none' : 'flex'; sup.style.display = 'none'; }
     }
-    async function sendMsg() {
-        const text = document.getElementById('inp-support').value.trim(); if (!text) return; document.getElementById('inp-support').value = '';
-        await fetch('/api/send_chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) });
-        const msgs = document.getElementById('msgs-support');
-        msgs.innerHTML += `<div class="msg my" style="background: #79c0ff; color: #000; align-self: flex-end; padding: 8px 12px; border-radius: 8px; font-size: 13px; max-width: 80%;"><b>Вы:</b><br>${text}</div>`;
-        msgs.scrollTop = msgs.scrollHeight;
+
+    // Поддержка Логика
+    async function loadSupportChat() {
+        try {
+            const res = await fetch('/api/get_chat', { cache: 'no-store' });
+            const msgs = await res.json();
+            const container = document.getElementById('msgs-support');
+            container.innerHTML = '';
+            if (msgs.length === 0) {
+                container.innerHTML = '<p style="color:#8b949e; font-size: 13px;">Напишите нам. Ответ придет в ближайшее время.</p>';
+            } else {
+                msgs.forEach(m => {
+                    const div = document.createElement('div');
+                    if (m.is_admin) {
+                        div.className = 'msg other'; div.style = "background: #30363d; color: #fff; align-self: flex-start; padding: 8px 12px; border-radius: 8px; font-size: 13px; max-width: 80%;";
+                        div.innerHTML = `<b>Поддержка:</b><br>${m.text}`;
+                    } else {
+                        div.className = 'msg my'; div.style = "background: #79c0ff; color: #000; align-self: flex-end; padding: 8px 12px; border-radius: 8px; font-size: 13px; max-width: 80%;";
+                        div.innerHTML = `<b>Вы:</b><br>${m.text}`;
+                    }
+                    container.appendChild(div);
+                });
+            }
+            container.scrollTop = container.scrollHeight;
+        } catch(e) {}
     }
+
+    async function sendMsg() {
+        const text = document.getElementById('inp-support').value.trim(); if (!text) return; 
+        document.getElementById('inp-support').value = '';
+        await fetch('/api/send_chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) });
+        loadSupportChat();
+    }
+
+    // Загружаем чат при старте страницы, чтобы история не пропадала
+    document.addEventListener("DOMContentLoaded", () => { loadSupportChat(); });
+    // Автоматическое обновление чата каждые 2 секунды, чтобы ответы приходили сами
+    setInterval(() => { if(document.getElementById('chat-support').style.display === 'flex') loadSupportChat(); }, 2000);
 </script>
 """
 
@@ -309,7 +330,7 @@ def dashboard():
             }}
             function closeModal() {{ document.getElementById('add-modal').style.display = 'none'; }}
             async function loadServers() {{
-                const res = await fetch('/api/get_servers'); const servers = await res.json(); const grid = document.getElementById('servers-grid'); grid.innerHTML = '';
+                const res = await fetch('/api/get_servers', {{ cache: 'no-store' }}); const servers = await res.json(); const grid = document.getElementById('servers-grid'); grid.innerHTML = '';
                 if (servers.length === 0) {{ grid.innerHTML = '<p style="color:#8b949e;">Нет серверов. Нажмите "+ Создать консоль".</p>'; return; }}
                 servers.forEach(s => {{
                     grid.innerHTML += `<div style="background: rgba(22,27,34,0.8); border: 1px solid #30363d; border-radius: 12px; padding: 15px; position: relative;"><button style="position: absolute; top: 10px; right: 10px; background: none; border: none; color: #8b949e; cursor: pointer;" onclick='openModal(${{JSON.stringify(s)}})'>✎</button><h3 style="color: #fff; margin-bottom: 8px; font-size: 16px;">${{s.name}}</h3><p style="color: #8b949e; font-size: 13px; font-family: monospace; margin-bottom: 5px;">IP: ${{s.ip}}:${{s.port}}</p><p style="color: #ffb86c; font-weight: bold; margin-bottom: 12px; font-size: 13px;">Ник: ${{s.nickname}}</p><a href="/console/${{s.id}}" style="display: block; text-align: center; background: #88ff00; color: #000; text-decoration: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px;">Открыть консоль</a></div>`;
@@ -344,7 +365,7 @@ def services():
         {CHAT_HTML}
         <script>
             async function loadServices() {{
-                const res = await fetch('/api/services'); const services = await res.json(); const grid = document.getElementById('services-grid'); grid.innerHTML = '';
+                const res = await fetch('/api/services', {{ cache: 'no-store' }}); const services = await res.json(); const grid = document.getElementById('services-grid'); grid.innerHTML = '';
                 services.forEach(s => {{
                     grid.innerHTML += `<div style="background: rgba(22,27,34,0.8); border: 1px solid #30363d; border-radius: 12px; padding: 25px; text-align: center;"><h3 style="color: #fff; font-size: 20px; margin-bottom: 10px;">${{s.name}}</h3><div style="color: #88ff00; font-size: 24px; font-weight: bold; margin-bottom: 15px;">${{s.price}}</div><p style="color: #8b949e; font-size: 14px; margin-bottom: 20px; min-height: 40px;">${{s.description}}</p><button style="width: 100%; padding: 10px; background: none; border: 1px solid #88ff00; color: #88ff00; border-radius: 8px; font-weight: bold; cursor: pointer;" onclick="alert('Для покупки напишите в Поддержку!')">Выбрать</button></div>`;
                 }});
@@ -430,7 +451,7 @@ def admin():
         <script>
             let currentRecipient = null;
             async function loadUsers() {{
-                const res = await fetch('/api/admin/get_users'); const users = await res.json(); const tbody = document.querySelector('#users-table tbody'); tbody.innerHTML = '';
+                const res = await fetch('/api/admin/get_users', {{ cache: 'no-store' }}); const users = await res.json(); const tbody = document.querySelector('#users-table tbody'); tbody.innerHTML = '';
                 users.forEach(u => {{
                     tbody.innerHTML += `<tr><td>${{u.username}}</td><td><input type="number" value="${{u.server_limit}}" style="width: 50px; background: #0d1117; color: #fff; border: 1px solid #30363d; padding: 4px; border-radius: 4px;" onchange="updateLimit(${{u.id}}, this.value)"></td><td>${{u.username !== 'admin' ? `<button class="btn-del" onclick="delUser(${{u.id}})">Удалить</button>` : '-'}}</td></tr>`;
                 }});
@@ -444,7 +465,7 @@ def admin():
             }}
             async function delUser(id) {{ if (!confirm('Удалить?')) return; await fetch('/api/admin/del_user', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{id}}) }}); loadUsers(); }}
             async function loadServices() {{
-                const res = await fetch('/api/services'); const services = await res.json();
+                const res = await fetch('/api/services', {{ cache: 'no-store' }}); const services = await res.json();
                 document.getElementById('services-list').innerHTML = services.map(s => `<div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #30363d;"><div><b style="color:#fff;">${{s.name}}</b> - ${{s.price}}</div><button class="btn-del" onclick="delService(${{s.id}})">X</button></div>`).join('');
             }}
             async function addService() {{
@@ -455,7 +476,7 @@ def admin():
             }}
             async function delService(id) {{ if(!confirm('Удалить тариф?')) return; await fetch('/api/admin/del_service', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{id}}) }}); loadServices(); }}
             async function loadChatUsers() {{
-                const res = await fetch('/api/admin/get_chat_users'); const users = await res.json(); const list = document.getElementById('chat-users-list'); list.innerHTML = '';
+                const res = await fetch('/api/admin/get_chat_users', {{ cache: 'no-store' }}); const users = await res.json(); const list = document.getElementById('chat-users-list'); list.innerHTML = '';
                 if (users.length === 0) {{ list.innerHTML = '<div style="padding: 15px; color: #8b949e; font-size: 13px;">Нет сообщений</div>'; return; }}
                 users.forEach(u => {{
                     const div = document.createElement('div'); div.className = `user-item ${{currentRecipient === u ? 'active' : ''}}`; div.innerText = u;
@@ -465,7 +486,7 @@ def admin():
             async function loadChatMessages() {{
                 if (!currentRecipient) return;
                 document.getElementById('chat-header').innerText = `Чат с ${{currentRecipient}}`;
-                const res = await fetch(`/api/admin/get_messages?user=${{currentRecipient}}`); const msgs = await res.json(); const box = document.getElementById('admin-chat-messages');
+                const res = await fetch(`/api/admin/get_messages?user=${{currentRecipient}}`, {{ cache: 'no-store' }}); const msgs = await res.json(); const box = document.getElementById('admin-chat-messages');
                 box.innerHTML = msgs.map(m => `<div class="msg ${{m.is_admin ? 'adm' : 'usr'}}">${{m.text}} <span style="font-size:10px; opacity:0.6;">${{m.time}}</span></div>`).join('');
                 box.scrollTop = box.scrollHeight;
             }}
@@ -475,7 +496,7 @@ def admin():
                 await fetch('/api/admin/reply', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{recipient: currentRecipient, text}}) }});
                 loadChatMessages();
             }}
-            loadUsers(); loadServices(); loadChatUsers(); setInterval(() => {{ loadChatUsers(); if(currentRecipient) loadChatMessages(); }}, 3000);
+            loadUsers(); loadServices(); loadChatUsers(); setInterval(() => {{ loadChatUsers(); if(currentRecipient) loadChatMessages(); }}, 2000);
         </script>
     </body></html>
     """)
@@ -580,7 +601,7 @@ def server_console(server_id):
 
             setInterval(async () => {{
                 try {{
-                    const res = await fetch('/api/chat'); const messages = await res.json();
+                    const res = await fetch('/api/chat', {{ cache: 'no-store' }}); const messages = await res.json();
                     if (messages.length > lastChatLength) {{
                         let newMsgs = lastChatLength === -1 ? [] : messages.slice(lastChatLength);
                         newMsgs.forEach(m => appendLine(`<span class="chat-user">[${{m.username}}]</span> <span class="chat-msg">${{m.text}}</span>`));

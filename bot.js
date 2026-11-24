@@ -6,7 +6,7 @@ const cors = require('cors');
 let currentConfig = {
     host: 'mc.hypemc.pro',
     port: 25565,
-    username: 'ТВОЙ_НИК',
+    username: 'MechtaAdm',
     auth: 'offline'
 };
 
@@ -24,17 +24,16 @@ app.post('/connect', (req, res) => {
     if (port) currentConfig.port = parseInt(port);
     if (username) currentConfig.username = username;
 
-    if (bot) { bot.quit(); bot = null; }
+    if (bot) { try { bot.quit(); } catch(e){} bot = null; }
     chatLog.push({ type: 'system', text: `Переподключение к ${currentConfig.host}...` });
-    createBot();
+    setTimeout(() => createBot(), 1000);
     res.json({ status: 'ok' });
 });
 
-// НОВЫЙ ЭНДПОИНТ ДЛЯ ПЕРЕЗАХОДА
 app.post('/reconnect', (req, res) => {
-    if (bot) { bot.quit(); bot = null; }
+    if (bot) { try { bot.quit(); } catch(e){} bot = null; }
     chatLog.push({ type: 'system', text: `Принудительный перезапуск...` });
-    setTimeout(createBot, 1000); // Небольшая задержка для закрытия сокета
+    setTimeout(() => createBot(), 1000);
     res.json({ status: 'ok' });
 });
 
@@ -53,16 +52,20 @@ app.get('/health', (req, res) => { res.send('OK'); });
 app.listen(process.env.PORT || 3001, () => { console.log('=== БОТ ЗАПУЩЕН ==='); });
 
 function createBot() {
-    if (bot) bot.quit();
+    if (bot) { try { bot.quit(); } catch(e){} }
+    console.log(`[BOT] Подключение к ${currentConfig.host}:${currentConfig.port}...`);
     bot = mineflayer.createBot(currentConfig);
+    
     bot.on('spawn', () => {
         chatLog.push({ type: 'system', text: `Бот ${bot.username} зашел на сервер` });
     });
+    
     bot.on('messagestr', (message) => {
         if (message === lastMessage) return;
         lastMessage = message;
         chatLog.push({ type: 'chat', username: 'Сервер', text: message });
     });
+    
     bot.on('error', (err) => { chatLog.push({ type: 'system', text: `Ошибка: ${err.message}` }); });
     bot.on('kicked', (reason) => { chatLog.push({ type: 'system', text: `Кикнут: ${reason}` }); });
     bot.on('end', () => { setTimeout(createBot, 10000); });

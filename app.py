@@ -10,11 +10,9 @@ app.secret_key = "OmegaProtocol_Super_Secret_Key_2026"
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
 
 BOT_URL = os.environ.get("BOT_URL", "http://127.0.0.1:3001").rstrip("/")
-DB_FILE = "database.db"
 
-# Сброс БД при необходимости
-if os.environ.get("RESET_DB") == "true" and os.path.exists(DB_FILE):
-    os.remove(DB_FILE)
+# ВАЖНО: Путь к базе данных. Если Render перезапускается, база сохраняется в той же папке.
+DB_FILE = "database.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -33,9 +31,24 @@ def init_db():
         c.execute("INSERT INTO services (name, price, description) VALUES ('Базовый', 'Бесплатно', '1 консоль, стандартная поддержка')")
         c.execute("INSERT INTO services (name, price, description) VALUES ('Премиум', '149 руб/мес', '5 консолей, приоритетная поддержка')")
         c.execute("INSERT INTO services (name, price, description) VALUES ('Бизнес', '399 руб/мес', 'Безлимит консолей, выделенный менеджер')")
+    conn.commit()
+    conn.close()
+
+# Создаем таблицы только при первом запуске, если файла нет
+if not os.path.exists(DB_FILE):
+    init_db()
+    
+# Проверка и обновление структуры (на случай старых версий)
+def update_db_schema():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    try: c.execute("ALTER TABLE messages ADD COLUMN is_admin INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN server_limit INTEGER DEFAULT 1")
+    except: pass
     conn.commit(); conn.close()
 
-init_db()
+update_db_schema()
 
 @app.before_request
 def block_direct_url_access():
@@ -46,7 +59,7 @@ def block_direct_url_access():
     return None
 
 # ==========================================
-# БАЗОВЫЙ CSS И ШАПКА ДЛЯ ВСЕХ СТРАНИЦ
+# БАЗОВЫЙ CSS И ШАПКА
 # ==========================================
 COMMON_CSS = """
 <style>
@@ -80,7 +93,6 @@ COMMON_CSS = """
     .modal-content button { width: 100%; padding: 12px; background: #88ff00; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-bottom: 8px; }
     .modal-content .cancel { background: #30363d; color: #fff; }
     
-    /* Кнопки поддержки и ИИ */
     .chat-btn { position: fixed; bottom: 20px; right: 20px; background: #79c0ff; color: #0a0f1a; border: none; padding: 15px; border-radius: 50%; width: 55px; height: 55px; font-size: 22px; cursor: pointer; box-shadow: 0 4px 15px rgba(121,192,255,0.4); z-index: 100; display: flex; justify-content: center; align-items: center; }
     .ai-btn { position: fixed; bottom: 20px; right: 85px; background: #b57bff; color: #0a0f1a; border: none; padding: 15px; border-radius: 50%; width: 55px; height: 55px; font-size: 22px; cursor: pointer; box-shadow: 0 4px 15px rgba(181,123,255,0.4); z-index: 100; display: flex; justify-content: center; align-items: center; }
     .chat-window { position: fixed; bottom: 85px; right: 20px; width: 300px; max-width: calc(100vw - 40px); height: 400px; background: #161b22; border: 1px solid #30363d; border-radius: 12px; display: none; flex-direction: column; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
@@ -532,8 +544,11 @@ def server_console(server_id):
                 if (isMuted) {{
                     mutedMessages.push(html);
                 }} else {{
+                    const isScrolledToBottom = output.scrollHeight - output.clientHeight <= output.scrollTop + 50;
                     output.innerHTML += `<div class="line"><span class="time">${{now()}}</span> ${{html}}</div>`;
-                    output.scrollTop = output.scrollHeight;
+                    if (isScrolledToBottom) {{
+                        output.scrollTop = output.scrollHeight;
+                    }}
                 }}
             }}
 

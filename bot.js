@@ -7,7 +7,8 @@ let currentConfig = {
     host: 'mc.hypemc.pro',
     port: 25565,
     username: 'MechtaAdm',
-    auth: 'offline'
+    auth: 'offline',
+    version: '1.21.11' // Указана нужная версия
 };
 
 let bot = null;
@@ -57,7 +58,7 @@ function createBot() {
     bot = mineflayer.createBot(currentConfig);
     
     bot.on('spawn', () => {
-        chatLog.push({ type: 'system', text: `Бот ${bot.username} зашел на сервер` });
+        chatLog.push({ type: 'system', text: `Бот ${bot.username} зашел на сервер (1.21.11)` });
     });
     
     bot.on('messagestr', (message) => {

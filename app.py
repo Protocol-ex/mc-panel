@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, url_for, session, jsonify, render_template_string
+from flask import Flask, request, redirect, url_for, session, jsonify, render_template
 import requests
 import os
 import sqlite3
@@ -12,20 +12,19 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
 BOT_URL = os.environ.get("BOT_URL", "http://127.0.0.1:3001").rstrip("/")
 DB_FILE = "database.db"
 
+# Если на Render задана переменная RESET_DB=true, удаляем старую базу
+if os.environ.get("RESET_DB") == "true" and os.path.exists(DB_FILE):
+    os.remove(DB_FILE)
+    print("БАЗА ДАННЫХ СБРОШЕНА!")
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, role TEXT DEFAULT 'user', server_limit INTEGER DEFAULT 1)''')
     c.execute('''CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, ip TEXT, port INTEGER, nickname TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT, text TEXT, time TEXT, is_admin INTEGER DEFAULT 0, recipient TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT, recipient TEXT, text TEXT, time TEXT, is_admin INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS services (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price TEXT, description TEXT)''')
     
-    # Миграции на случай старых версий БД
-    try: c.execute("ALTER TABLE messages ADD COLUMN recipient TEXT")
-    except: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN server_limit INTEGER DEFAULT 1")
-    except: pass
-
     c.execute("SELECT * FROM users WHERE username='admin'")
     if not c.fetchone():
         c.execute("INSERT INTO users (username, password, role, server_limit) VALUES ('admin', ?, 'admin', 999)", (generate_password_hash("omega123"),))
@@ -48,88 +47,8 @@ def block_direct_url_access():
     return None
 
 # ==========================================
-# БАЗОВЫЙ HTML ШАБЛОН (Сайдбар для всех)
+# HTML ШАБЛОНЫ (JINJA2)
 # ==========================================
-BASE_LAYOUT = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}HypeMC Panel{% endblock %}</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { height: 100vh; display: flex; font-family: 'Segoe UI', sans-serif; background: #0a0c10; color: #c9d1d9; overflow: hidden; }
-        
-        /* --- Сайдбар --- */
-        .sidebar { width: 240px; background: rgba(22,27,34,0.95); border-right: 1px solid #30363d; display: flex; flex-direction: column; padding: 20px 0; z-index: 10; }
-        .logo { font-size: 22px; font-weight: bold; padding: 0 20px; margin-bottom: 30px; color: #fff; }
-        .hype { color: #ffffff; } .mc { color: #88ff00; }
-        .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 20px; color: #8b949e; text-decoration: none; font-size: 15px; transition: 0.2s; cursor: pointer; }
-        .nav-item:hover, .nav-item.active { background: rgba(136,255,0,0.1); color: #88ff00; border-right: 3px solid #88ff00; }
-        .nav-icon { font-size: 18px; width: 24px; text-align: center; }
-        
-        /* --- Основная часть --- */
-        .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
-        .topbar { display: flex; justify-content: space-between; align-items: center; padding: 15px 30px; background: rgba(22,27,34,0.85); border-bottom: 1px solid rgba(136,255,0,0.15); }
-        .user-info { color: #8b949e; font-size: 14px; } .user-info b { color: #88ff00; }
-        .logout { color: #ff7b72; text-decoration: none; padding: 6px 14px; border: 1px solid rgba(255,123,114,0.4); border-radius: 6px; font-size: 13px; margin-left: 15px; }
-        .logout:hover { background: rgba(255,123,114,0.15); }
-        .page-body { flex: 1; padding: 30px; overflow-y: auto; }
-        
-        /* Мобильная адаптация сайдбара */
-        @media (max-width: 768px) {
-            .sidebar { width: 70px; }
-            .sidebar .logo, .sidebar .nav-text { display: none; }
-            .nav-item { justify-content: center; padding: 15px 0; }
-            .topbar { padding: 10px 15px; }
-            .page-body { padding: 15px; }
-        }
-
-        /* Общие стили */
-        .btn-add { background: #88ff00; color: #0a0f1a; border: none; padding: 12px 24px; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        .btn-add:hover { transform: scale(1.02); filter: brightness(1.1); }
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 1000; padding: 15px; }
-        .modal-content { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 12px; width: 100%; max-width: 400px; text-align: center; }
-        .modal-content h2 { margin-bottom: 15px; color: #88ff00; font-size: 18px; }
-        .modal-content input { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: #fff; outline: none; }
-        .modal-content button { width: 100%; padding: 12px; background: #88ff00; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-bottom: 8px; }
-        .modal-content .cancel { background: #30363d; color: #fff; }
-    </style>
-    {% block head %}{% endblock %}
-</head>
-<body>
-    <aside class="sidebar">
-        <div class="logo"><span class="hype">Hype</span><span class="mc">MC</span></div>
-        <a href="/dashboard" class="nav-item {% if active_tab == 'servers' %}active{% endif %}">
-            <span class="nav-icon">🖥</span><span class="nav-text">Мои сервера</span>
-        </a>
-        <a href="/services" class="nav-item {% if active_tab == 'services' %}active{% endif %}">
-            <span class="nav-icon">💎</span><span class="nav-text">Услуги</span>
-        </a>
-        {% if session.get('role') == 'admin' %}
-        <a href="/admin" class="nav-item {% if active_tab == 'admin' %}active{% endif %}">
-            <span class="nav-icon">🛡️</span><span class="nav-text">Админ-панель</span>
-        </a>
-        {% endif %}
-    </aside>
-
-    <div class="content">
-        <div class="topbar">
-            <div style="font-size: 18px; font-weight: bold; color: #fff;">{% block header_title %}{% endblock %}</div>
-            <div>
-                <span class="user-info">{{ session.get('user') }} ({{ session.get('role') }})</span>
-                <a class="logout" href="/logout">Выйти</a>
-            </div>
-        </div>
-        <div class="page-body">
-            {% block content %}{% endblock %}
-        </div>
-    </div>
-    {% block scripts %}{% endblock %}
-</body>
-</html>
-"""
 
 LOGIN_HTML = """
 <!DOCTYPE html>
@@ -209,6 +128,78 @@ LOGIN_HTML = """
 </html>
 """
 
+BASE_LAYOUT = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}HypeMC Panel{% endblock %}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { height: 100vh; display: flex; font-family: 'Segoe UI', sans-serif; background: #0a0c10; color: #c9d1d9; overflow: hidden; }
+        .sidebar { width: 240px; background: rgba(22,27,34,0.95); border-right: 1px solid #30363d; display: flex; flex-direction: column; padding: 20px 0; z-index: 10; }
+        .logo { font-size: 22px; font-weight: bold; padding: 0 20px; margin-bottom: 30px; color: #fff; }
+        .hype { color: #ffffff; } .mc { color: #88ff00; }
+        .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 20px; color: #8b949e; text-decoration: none; font-size: 15px; transition: 0.2s; cursor: pointer; }
+        .nav-item:hover, .nav-item.active { background: rgba(136,255,0,0.1); color: #88ff00; border-right: 3px solid #88ff00; }
+        .nav-icon { font-size: 18px; width: 24px; text-align: center; }
+        .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+        .topbar { display: flex; justify-content: space-between; align-items: center; padding: 15px 30px; background: rgba(22,27,34,0.85); border-bottom: 1px solid rgba(136,255,0,0.15); }
+        .user-info { color: #8b949e; font-size: 14px; } .user-info b { color: #88ff00; }
+        .logout { color: #ff7b72; text-decoration: none; padding: 6px 14px; border: 1px solid rgba(255,123,114,0.4); border-radius: 6px; font-size: 13px; margin-left: 15px; }
+        .logout:hover { background: rgba(255,123,114,0.15); }
+        .page-body { flex: 1; padding: 30px; overflow-y: auto; }
+        @media (max-width: 768px) {
+            .sidebar { width: 70px; }
+            .sidebar .logo, .sidebar .nav-text { display: none; }
+            .nav-item { justify-content: center; padding: 15px 0; }
+            .topbar { padding: 10px 15px; }
+            .page-body { padding: 15px; }
+        }
+        .btn-add { background: #88ff00; color: #0a0f1a; border: none; padding: 12px 24px; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn-add:hover { transform: scale(1.02); filter: brightness(1.1); }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 1000; padding: 15px; }
+        .modal-content { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 12px; width: 100%; max-width: 400px; text-align: center; }
+        .modal-content h2 { margin-bottom: 15px; color: #88ff00; font-size: 18px; }
+        .modal-content input { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: #fff; outline: none; }
+        .modal-content button { width: 100%; padding: 12px; background: #88ff00; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-bottom: 8px; }
+        .modal-content .cancel { background: #30363d; color: #fff; }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="logo"><span class="hype">Hype</span><span class="mc">MC</span></div>
+        <a href="/dashboard" class="nav-item {% if active_tab == 'servers' %}active{% endif %}">
+            <span class="nav-icon">🖥</span><span class="nav-text">Мои сервера</span>
+        </a>
+        <a href="/services" class="nav-item {% if active_tab == 'services' %}active{% endif %}">
+            <span class="nav-icon">💎</span><span class="nav-text">Услуги</span>
+        </a>
+        {% if session.get('role') == 'admin' %}
+        <a href="/admin" class="nav-item {% if active_tab == 'admin' %}active{% endif %}">
+            <span class="nav-icon">🛡️</span><span class="nav-text">Админ-панель</span>
+        </a>
+        {% endif %}
+    </aside>
+    <div class="content">
+        <div class="topbar">
+            <div style="font-size: 18px; font-weight: bold; color: #fff;">{% block header_title %}{% endblock %}</div>
+            <div>
+                <span class="user-info">{{ session.get('user') }} ({{ session.get('role') }})</span>
+                <a class="logout" href="/logout">Выйти</a>
+            </div>
+        </div>
+        <div class="page-body">
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
+"""
+
 DASHBOARD_HTML = """
 {% extends "base" %}
 {% block title %}Мои сервера — HypeMC Panel{% endblock %}
@@ -216,7 +207,6 @@ DASHBOARD_HTML = """
 {% block content %}
     <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px;" id="servers-grid"></div>
     <button class="btn-add" style="position: fixed; bottom: 30px; left: 270px;" onclick="openModal()">+ Создать консоль</button>
-
     <div class="modal" id="add-modal">
         <div class="modal-content">
             <h2 id="modal-title">Новый сервер</h2>
@@ -248,7 +238,6 @@ DASHBOARD_HTML = """
         }
     }
     function closeModal() { document.getElementById('add-modal').style.display = 'none'; }
-
     async function loadServers() {
         const res = await fetch('/api/get_servers');
         const servers = await res.json();
@@ -267,7 +256,6 @@ DASHBOARD_HTML = """
             `;
         });
     }
-
     async function saveServer() {
         const id = document.getElementById('edit-id').value;
         const name = document.getElementById('m-name').value.trim();
@@ -283,84 +271,6 @@ DASHBOARD_HTML = """
     loadServers();
 </script>
 {% endblock %}
-"""
-
-CONSOLE_HTML = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Консоль — {{ server.name }}</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { height: 100vh; display: flex; flex-direction: column; font-family: 'Consolas', monospace; background: #0a0c10; color: #c9d1d9; overflow: hidden; }
-        header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; }
-        .back-btn { color: #8b949e; text-decoration: none; margin-right: 15px; padding: 6px 10px; border: 1px solid #30363d; border-radius: 6px; font-size: 13px; }
-        .back-btn:hover { border-color: #88ff00; color: #88ff00; }
-        .reconnect-btn { background: none; border: 1px solid #ff7b72; color: #ff7b72; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: 10px; font-size: 12px; }
-        .main { flex: 1; padding: 15px; display: flex; flex-direction: column; }
-        #console-output { flex: 1; overflow-y: auto; background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 15px; font-size: 13px; line-height: 1.6; }
-        .line { margin-bottom: 5px; word-break: break-all; }
-        .line .time { color: #484f58; font-size: 11px; margin-right: 6px; }
-        .line .system { color: #8b949e; font-style: italic; }
-        .line .chat-user { color: #ffb86c; font-weight: bold; }
-        .line .chat-msg { color: #f8f8f2; }
-        .input-row { display: flex; margin-top: 10px; gap: 8px; }
-        #cmd-input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #30363d; background: #161b22; color: #fff; outline: none; }
-        #cmd-input:focus { border-color: #88ff00; }
-        #send-btn { padding: 0 20px; background: #88ff00; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
-    </style>
-</head>
-<body>
-    <header>
-        <div style="display:flex; align-items:center;">
-            <a href="/dashboard" class="back-btn">← Назад</a>
-            <b style="color:#fff;">Консоль: {{ server.name }}</b>
-            <button class="reconnect-btn" onclick="forceReconnect()">🔄 Перезайти</button>
-        </div>
-        <div style="font-size: 12px; color: #8b949e;">
-            <span style="color:#88ff00;">{{ server.ip }}:{{ server.port }}</span> | <span style="color:#ffb86c;">{{ server.nickname }}</span>
-        </div>
-    </header>
-    <div class="main">
-        <div id="console-output"><div class="line"><span class="system">Подключение...</span></div></div>
-        <form class="input-row" id="cmd-form">
-            <input type="text" id="cmd-input" placeholder="Введите команду..." autocomplete="off" autofocus>
-            <button type="submit" id="send-btn">➤</button>
-        </form>
-    </div>
-    <script>
-        const output = document.getElementById('console-output');
-        const form = document.getElementById('cmd-form');
-        const input = document.getElementById('cmd-input');
-        let lastChatLength = -1;
-        function now() { return new Date().toLocaleTimeString('ru-RU'); }
-        function appendLine(html) { output.innerHTML += `<div class="line"><span class="time">${now()}</span> ${html}</div>`; output.scrollTop = output.scrollHeight; }
-        
-        window.onload = async () => {
-            await fetch('/api/connect', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ host: "{{ server.ip }}", port: "{{ server.port }}", username: "{{ server.nickname }}" }) });
-        };
-        async function forceReconnect() { appendLine(`<span class="system">Перезапуск...</span>`); await fetch('/api/reconnect', { method: 'POST' }); }
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault(); const cmd = input.value.trim(); if (!cmd) return;
-            input.value = ''; appendLine(`<span style="color:#88ff00;">></span> <span style="color:#79c0ff;">${cmd}</span>`);
-            const res = await fetch('/api/command', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd}) });
-            if (!res.ok) appendLine(`<span style="color:#ff7b72;">Ошибка отправки</span>`);
-        });
-        setInterval(async () => {
-            try {
-                const res = await fetch('/api/chat'); const messages = await res.json();
-                if (messages.length > lastChatLength) {
-                    let newMsgs = lastChatLength === -1 ? [] : messages.slice(lastChatLength);
-                    newMsgs.forEach(m => appendLine(`<span class="chat-user">[${m.username}]</span> <span class="chat-msg">${m.text}</span>`));
-                    lastChatLength = messages.length;
-                }
-            } catch(e){}
-        }, 1000);
-    </script>
-</body>
-</html>
 """
 
 SERVICES_HTML = """
@@ -410,8 +320,6 @@ ADMIN_HTML = """
     .add-form input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: #fff; }
     .add-form button { padding: 10px 15px; background: #88ff00; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
     .btn-del { background: #ff7b72; color: #000; border: none; padding: 4px 8px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 12px; }
-    
-    /* Мессенджер */
     .messenger { display: flex; height: 400px; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; background: #0d1117; }
     .users-list { width: 200px; border-right: 1px solid #30363d; overflow-y: auto; }
     .user-item { padding: 12px; border-bottom: 1px solid #30363d; cursor: pointer; transition: 0.2s; font-size: 14px; }
@@ -429,7 +337,6 @@ ADMIN_HTML = """
 {% endblock %}
 {% block content %}
     <div class="admin-grid">
-        <!-- Пользователи -->
         <div class="panel">
             <h2>Пользователи</h2>
             <div class="add-form">
@@ -439,8 +346,6 @@ ADMIN_HTML = """
             </div>
             <table id="users-table"><thead><tr><th>Логин</th><th>Лимит</th><th>Действие</th></tr></thead><tbody></tbody></table>
         </div>
-
-        <!-- Услуги -->
         <div class="panel">
             <h2>Управление Услугами</h2>
             <div class="add-form" style="flex-direction: column;">
@@ -451,8 +356,6 @@ ADMIN_HTML = """
             </div>
             <div id="services-list" style="max-height: 200px; overflow-y: auto;"></div>
         </div>
-
-        <!-- Мессенджер -->
         <div class="panel" style="grid-column: 1 / -1;">
             <h2>Поддержка (Чаты)</h2>
             <div class="messenger">
@@ -474,21 +377,11 @@ ADMIN_HTML = """
 {% block scripts %}
 <script>
     let currentRecipient = null;
-
-    // === Пользователи ===
     async function loadUsers() {
-        const res = await fetch('/api/admin/get_users');
-        const users = await res.json();
-        const tbody = document.querySelector('#users-table tbody');
-        tbody.innerHTML = '';
+        const res = await fetch('/api/admin/get_users'); const users = await res.json();
+        const tbody = document.querySelector('#users-table tbody'); tbody.innerHTML = '';
         users.forEach(u => {
-            tbody.innerHTML += `
-                <tr>
-                    <td>${u.username}</td>
-                    <td><input type="number" value="${u.server_limit}" style="width: 50px; background: #0d1117; color: #fff; border: 1px solid #30363d; padding: 4px; border-radius: 4px;" onchange="updateLimit(${u.id}, this.value)"></td>
-                    <td>${u.username !== 'admin' ? `<button class="btn-del" onclick="delUser(${u.id})">Удалить</button>` : '-'}</td>
-                </tr>
-            `;
+            tbody.innerHTML += `<tr><td>${u.username}</td><td><input type="number" value="${u.server_limit}" style="width: 50px; background: #0d1117; color: #fff; border: 1px solid #30363d; padding: 4px; border-radius: 4px;" onchange="updateLimit(${u.id}, this.value)"></td><td>${u.username !== 'admin' ? `<button class="btn-del" onclick="delUser(${u.id})">Удалить</button>` : '-'}</td></tr>`;
         });
     }
     async function updateLimit(id, limit) { await fetch('/api/admin/set_limit', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, limit: parseInt(limit)}) }); }
@@ -499,283 +392,21 @@ ADMIN_HTML = """
         if (res.ok) { document.getElementById('new-user').value = ''; document.getElementById('new-pass').value = ''; loadUsers(); } else { alert('Ошибка'); }
     }
     async function delUser(id) { if (!confirm('Удалить?')) return; await fetch('/api/admin/del_user', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }); loadUsers(); }
-
-    // === Услуги ===
     async function loadServices() {
         const res = await fetch('/api/services'); const services = await res.json();
-        document.getElementById('services-list').innerHTML = services.map(s => `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #30363d;">
-                <div><b style="color:#fff;">${s.name}</b> - ${s.price}</div>
-                <button class="btn-del" onclick="delService(${s.id})">X</button>
-            </div>
-        `).join('');
+        document.getElementById('services-list').innerHTML = services.map(s => `<div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #30363d;"><div><b style="color:#fff;">${s.name}</b> - ${s.price}</div><button class="btn-del" onclick="delService(${s.id})">X</button></div>`).join('');
     }
     async function addService() {
         const name = document.getElementById('srv-name').value.trim(); const price = document.getElementById('srv-price').value.trim(); const desc = document.getElementById('srv-desc').value.trim();
         if (!name || !price) return alert('Заполните название и цену');
         await fetch('/api/admin/add_service', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, price, description: desc}) });
-        document.getElementById('srv-name').value = ''; document.getElementById('srv-price').value = ''; document.getElementById('srv-desc').value = '';
-        loadServices();
+        document.getElementById('srv-name').value = ''; document.getElementById('srv-price').value = ''; document.getElementById('srv-desc').value = ''; loadServices();
     }
     async function delService(id) { if(!confirm('Удалить тариф?')) return; await fetch('/api/admin/del_service', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }); loadServices(); }
-
-    // === Мессенджер ===
     async function loadChatUsers() {
         const res = await fetch('/api/admin/get_chat_users'); const users = await res.json();
-        const list = document.getElementById('chat-users-list');
-        list.innerHTML = '';
+        const list = document.getElementById('chat-users-list'); list.innerHTML = '';
         if (users.length === 0) { list.innerHTML = '<div style="padding: 15px; color: #8b949e; font-size: 13px;">Нет сообщений</div>'; return; }
-        
         users.forEach(u => {
-            const div = document.createElement('div');
-            div.className = `user-item ${currentRecipient === u ? 'active' : ''}`;
-            div.innerText = u;
-            div.onclick = () => { currentRecipient = u; loadChatUsers(); loadChatMessages(); };
-            list.appendChild(div);
-        });
-    }
-    async function loadChatMessages() {
-        if (!currentRecipient) return;
-        document.getElementById('chat-header').innerText = `Чат с ${currentRecipient}`;
-        const res = await fetch(`/api/admin/get_messages?user=${currentRecipient}`); const msgs = await res.json();
-        const box = document.getElementById('admin-chat-messages');
-        box.innerHTML = msgs.map(m => `<div class="msg ${m.is_admin ? 'adm' : 'usr'}">${m.text} <span style="font-size:10px; opacity:0.6;">${m.time}</span></div>`).join('');
-        box.scrollTop = box.scrollHeight;
-    }
-    async function sendAdminReply() {
-        if (!currentRecipient) return alert('Выберите чат!');
-        const inp = document.getElementById('admin-reply-text'); const text = inp.value.trim();
-        if (!text) return; inp.value = '';
-        await fetch('/api/admin/reply', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({recipient: currentRecipient, text}) });
-        loadChatMessages();
-    }
-
-    loadUsers(); loadServices(); loadChatUsers();
-    setInterval(() => { loadChatUsers(); if(currentRecipient) loadChatMessages(); }, 3000);
-</script>
-{% endblock %}
-"""
-
-# ==========================================
-# РЕНДЕР И МАРШРУТЫ
-# ==========================================
-def render_page(template_name, **kwargs):
-    templates = {"base": BASE_LAYOUT, "login": LOGIN_HTML, "dashboard": DASHBOARD_HTML, "console": CONSOLE_HTML, "services": SERVICES_HTML, "admin": ADMIN_HTML}
-    from jinja2 import DictLoader, Environment
-    env = Environment(loader=DictLoader(templates))
-    return env.get_template(template_name).render(**kwargs)
-
-@app.route("/", methods=["GET", "POST"])
-def login():
-    error = None
-    if request.method == "POST":
-        user = request.form.get("username"); pwd = request.form.get("password"); robot = request.form.get("robot_check")
-        if not robot: error = "Пройдите капчу."
-        else:
-            conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-            c.execute("SELECT * FROM users WHERE username=?", (user,)); row = c.fetchone(); conn.close()
-            if row and check_password_hash(row[2], pwd):
-                session.clear(); session["logged_in"] = True; session["auth_ok"] = True; session["user"] = row[1]; session["role"] = row[3]
-                return redirect(url_for("dashboard"))
-            else: error = "Неверный логин или пароль"
-    return render_page("login", error=error)
-
-@app.route("/dashboard")
-def dashboard(): return render_page("dashboard", active_tab='servers')
-
-@app.route("/services")
-def services(): return render_page("services", active_tab='services')
-
-@app.route("/admin")
-def admin():
-    if session.get("role") != 'admin': return "Доступ запрещен", 403
-    return render_page("admin", active_tab='admin')
-
-@app.route("/console/<int:server_id>")
-def server_console(server_id):
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    if session["role"] == 'admin': c.execute("SELECT id, name, ip, port, nickname FROM servers WHERE id=?", (server_id,))
-    else: c.execute("SELECT id, name, ip, port, nickname FROM servers WHERE id=? AND user_id=(SELECT id FROM users WHERE username=?)", (server_id, session["user"]))
-    server = c.fetchone(); conn.close()
-    if not server: return "Сервер не найден", 403
-    return render_page("console", server={"id": server[0], "name": server[1], "ip": server[2], "port": server[3], "nickname": server[4]})
-
-@app.route("/logout")
-def logout(): session.clear(); return redirect(url_for("login"))
-
-# API ...
-@app.route("/api/get_servers")
-def api_get_servers():
-    if not session.get("logged_in"): return jsonify([])
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    if session["role"] == 'admin': c.execute("SELECT id, name, ip, port, nickname FROM servers")
-    else: c.execute("SELECT id, name, ip, port, nickname FROM servers WHERE user_id=(SELECT id FROM users WHERE username=?)", (session["user"],))
-    servers = [{"id": r[0], "name": r[1], "ip": r[2], "port": r[3], "nickname": r[4]} for r in c.fetchall()]
-    conn.close(); return jsonify(servers)
-
-@app.route("/api/add_server", methods=["POST"])
-def api_add_server():
-    if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT id, server_limit FROM users WHERE username=?", (session["user"],)); user = c.fetchone()
-    user_id, limit = user[0], user[1]
-    c.execute("SELECT COUNT(*) FROM servers WHERE user_id=?", (user_id,)); current_count = c.fetchone()[0]
-    if current_count >= limit:
-        conn.close(); return jsonify({"status": "error", "message": f"Лимит консолей ({limit}) исчерпан. Напишите в Поддержку!"}), 403
-    data = request.get_json()
-    c.execute("INSERT INTO servers (user_id, name, ip, port, nickname) VALUES (?, ?, ?, ?, ?)", (user_id, data['name'], data['ip'], data['port'], data['nickname']))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-@app.route("/api/edit_server", methods=["POST"])
-def api_edit_server():
-    if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
-    data = request.get_json(); sid = data.get("id")
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    if session["role"] != 'admin':
-        c.execute("SELECT id FROM servers WHERE id=? AND user_id=(SELECT id FROM users WHERE username=?)", (sid, session["user"]))
-        if not c.fetchone(): conn.close(); return jsonify({"error": "access denied"}), 403
-    c.execute("UPDATE servers SET name=?, ip=?, port=?, nickname=? WHERE id=?", (data['name'], data['ip'], data['port'], data['nickname'], sid))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-@app.route("/api/services")
-def api_services():
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT id, name, price, description FROM services")
-    services = [{"id": r[0], "name": r[1], "price": r[2], "description": r[3]} for r in c.fetchall()]
-    conn.close(); return jsonify(services)
-
-# === Поддержка ===
-@app.route("/api/get_chat")
-def api_get_chat():
-    if not session.get("logged_in"): return jsonify([])
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    if session.get("role") == 'admin':
-        c.execute("SELECT sender, text, time, is_admin FROM messages ORDER BY id ASC")
-    else:
-        c.execute("SELECT sender, text, time, is_admin FROM messages WHERE recipient=? OR (sender=? AND is_admin=0) ORDER BY id ASC", (session["user"], session["user"]))
-    msgs = [{"sender": r[0], "text": r[1], "time": r[2], "is_admin": r[3]} for r in c.fetchall()]
-    conn.close(); return jsonify(msgs)
-
-@app.route("/api/send_chat", methods=["POST"])
-def api_send_chat():
-    if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
-    text = request.get_json().get("text")
-    now = datetime.datetime.now().strftime("%H:%M")
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, recipient, text, time, is_admin) VALUES (?, 'ADMIN', ?, ?, 0)", (session["user"], text, now))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-@app.route("/api/admin/get_chat_users")
-def api_admin_get_chat_users():
-    if session.get("role") != 'admin': return jsonify([]), 403
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT DISTINCT sender FROM messages WHERE is_admin=0")
-    users = [r[0] for r in c.fetchall()]
-    conn.close(); return jsonify(users)
-
-@app.route("/api/admin/get_messages")
-def api_admin_get_messages():
-    if session.get("role") != 'admin': return jsonify([]), 403
-    user = request.args.get('user')
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT sender, text, time, is_admin FROM messages WHERE sender=? OR recipient=? ORDER BY id ASC", (user, user))
-    msgs = [{"sender": r[0], "text": r[1], "time": r[2], "is_admin": r[3]} for r in c.fetchall()]
-    conn.close(); return jsonify(msgs)
-
-@app.route("/api/admin/reply", methods=["POST"])
-def api_admin_reply():
-    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
-    data = request.get_json()
-    now = datetime.datetime.now().strftime("%H:%M")
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, recipient, text, time, is_admin) VALUES ('ADMIN', ?, ?, ?, 1)", (data.get('recipient'), data.get('text'), now))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-# === Управление пользователями ===
-@app.route("/api/admin/get_users")
-def api_admin_get_users():
-    if session.get("role") != 'admin': return jsonify([]), 403
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT id, username, server_limit FROM users")
-    users = [{"id": r[0], "username": r[1], "server_limit": r[2]} for r in c.fetchall()]
-    conn.close(); return jsonify(users)
-
-@app.route("/api/admin/set_limit", methods=["POST"])
-def api_admin_set_limit():
-    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
-    data = request.get_json()
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("UPDATE users SET server_limit=? WHERE id=?", (data.get("limit"), data.get("id")))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-@app.route("/api/admin/add_user", methods=["POST"])
-def api_admin_add_user():
-    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
-    data = request.get_json()
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users (username, password, role, server_limit) VALUES (?, ?, 'user', 1)", (data['username'], generate_password_hash(data['password'])))
-        conn.commit()
-    except sqlite3.IntegrityError: return jsonify({"error": "exists"}), 400
-    finally: conn.close()
-    return jsonify({"status": "ok"})
-
-@app.route("/api/admin/del_user", methods=["POST"])
-def api_admin_del_user():
-    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
-    uid = request.get_json().get("id")
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("DELETE FROM users WHERE id=?", (uid,))
-    c.execute("DELETE FROM servers WHERE user_id=?", (uid,))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-# === Услуги ===
-@app.route("/api/admin/add_service", methods=["POST"])
-def api_admin_add_service():
-    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
-    data = request.get_json()
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("INSERT INTO services (name, price, description) VALUES (?, ?, ?)", (data['name'], data['price'], data['description']))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-@app.route("/api/admin/del_service", methods=["POST"])
-def api_admin_del_service():
-    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
-    sid = request.get_json().get("id")
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("DELETE FROM services WHERE id=?", (sid,))
-    conn.commit(); conn.close(); return jsonify({"status": "ok"})
-
-# === Бот ===
-@app.route("/api/command", methods=["POST"])
-def api_command():
-    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
-    try:
-        resp = requests.post(f"{BOT_URL}/send", json={"command": request.get_json().get("command")}, timeout=10)
-        return jsonify({"status": "ok", "response": "Отправлено"})
-    except: return jsonify({"status": "ok", "response": "Ошибка бота"})
-
-@app.route("/api/connect", methods=["POST"])
-def api_connect():
-    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
-    try: requests.post(f"{BOT_URL}/connect", json=request.get_json(), timeout=10)
-    except: pass
-    return jsonify({"status": "ok"})
-
-@app.route("/api/reconnect", methods=["POST"])
-def api_reconnect():
-    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
-    try: requests.post(f"{BOT_URL}/reconnect", timeout=10)
-    except: pass
-    return jsonify({"status": "ok"})
-
-@app.route("/api/chat")
-def api_chat():
-    if not session.get("logged_in"): return jsonify([]), 401
-    try:
-        resp = requests.get(f"{BOT_URL}/chat", timeout=10)
-        return jsonify(resp.json())
-    except: return jsonify([])
-
-if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=5000)
+            const div = document.createElement('div'); div.className = `user-item ${currentRecipient === u ? 'active' : ''}`; div.innerText = u;
+            div.onclick = () => { currentRecipient =

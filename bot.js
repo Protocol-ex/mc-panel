@@ -4,8 +4,8 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 
 let currentConfig = {
-    host: 'mc.hypemc.pro', // Если сервер локальный (на вашем ПК), тут должно быть 127.0.0.1 или IP сервера
-    port: 25565,
+    host: '185.9.145.186', // Если сервер локальный (на вашем ПК), тут должно быть 127.0.0.1 или IP сервера
+    port: 32351,
     username: 'MechtaAdm',
     auth: 'offline',
     version: '1.21.11'

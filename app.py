@@ -1,5 +1,6 @@
 from flask import Flask, request, redirect, url_for, session, jsonify, render_template_string
 import requests
+import os
 
 app = Flask(__name__)
 app.secret_key = "OmegaProtocol_Secret_Key_ChangeMe"
@@ -8,7 +9,9 @@ USERNAME = "admin"
 PASSWORD = "omega123"
 console_log = []
 
-# ---------- HTML: страница входа ----------
+# Если переменная BOT_URL не задана (например, на локальном ПК), используем localhost
+BOT_URL = os.environ.get("BOT_URL", "http://127.0.0.1:3001").rstrip("/")
+
 LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -45,7 +48,6 @@ LOGIN_HTML = """
 </html>
 """
 
-# ---------- HTML: страница консоли ----------
 CONSOLE_HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -114,7 +116,7 @@ CONSOLE_HTML = """
         </aside>
         <section class="console-area">
             <div id="console-output">
-                <div class="line"><span class="system">Добро пожаловать в консоль. Чат сервера выводится автоматически.</span></div>
+                <div class="line"><span class="system">Ожидание подключения к боту...</span></div>
             </div>
             <form class="input-row" id="cmd-form">
                 <input type="text" id="cmd-input" placeholder="Введите команду..." autocomplete="off" autofocus>
@@ -126,7 +128,8 @@ CONSOLE_HTML = """
         const output = document.getElementById('console-output');
         const form = document.getElementById('cmd-form');
         const input = document.getElementById('cmd-input');
-        let lastChatIndex = -1;
+        let lastChatLength = -1;
+        let botOfflineReported = false;
 
         function now() {
             const d = new Date();
@@ -141,7 +144,6 @@ CONSOLE_HTML = """
             output.scrollTop = output.scrollHeight;
         }
 
-        // Отправка команды
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const cmd = input.value.trim();
@@ -167,48 +169,52 @@ CONSOLE_HTML = """
             }
         });
 
-        // Кнопки быстрых команд
         document.querySelectorAll('.quick-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                const cmd = btn.dataset.cmd;
-                input.value = cmd;
+                input.value = btn.dataset.cmd;
                 input.focus();
-                if (!cmd.endsWith(' ')) form.dispatchEvent(new Event('submit', { cancelable: true }));
+                if (!btn.dataset.cmd.endsWith(' ')) form.dispatchEvent(new Event('submit', { cancelable: true }));
             });
         });
 
-        // ==== ЖИВОЙ ЧАТ ИЗ MINECRAFT ====
         async function fetchChat() {
             try {
                 const res = await fetch('/api/chat');
                 const messages = await res.json();
+                
+                if (messages.length === 0 && !botOfflineReported) {
+                    appendLine(`<span class="err">[ОШИБКА] Сайт не может получить данные от бота. Проверьте, запущен ли сервис mc-bot на Render.</span>`, true);
+                    botOfflineReported = true;
+                    return;
+                }
 
-                // Если пришло больше сообщений, чем было
-                if (messages.length > lastChatIndex) {
-                    const newMessages = messages.slice(lastChatIndex);
+                if (messages.length > lastChatLength) {
+                    let newMessages = lastChatLength === -1 ? [] : messages.slice(lastChatLength);
+                    
                     newMessages.forEach(msg => {
                         if (msg.type === 'chat') {
-                            appendLine(`<span class="chat-user">[${msg.username}]</span> <span class="chat-msg">${msg.text}</span>`);
+                            appendLine(`<span class="chat-user">[Сервер]</span> <span class="chat-msg">${msg.text}</span>`);
                         } else if (msg.type === 'system') {
                             appendLine(`<span class="system">[Система] ${msg.text}</span>`);
                         }
                     });
-                    lastChatIndex = messages.length;
+                    lastChatLength = messages.length;
+                    botOfflineReported = false;
                 }
             } catch (err) {
-                // Игнорируем ошибки, если бот выключен
+                if (!botOfflineReported) {
+                    appendLine(`<span class="err">[ОШИБКА] Бот не отвечает. Убедитесь, что сервис mc-bot запущен на Render.</span>`, true);
+                    botOfflineReported = true;
+                }
             }
         }
 
-        // Опрашиваем чат каждую секунду
         setInterval(fetchChat, 1000);
     </script>
 </body>
 </html>
 """
 
-
-# ---------- Маршруты ----------
 @app.route("/", methods=["GET", "POST"])
 def login():
     error = None
@@ -223,15 +229,12 @@ def login():
             error = "Неверный логин или пароль"
     return render_template_string(LOGIN_HTML, error=error)
 
-
 @app.route("/console")
 def console():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
     return render_template_string(CONSOLE_HTML, user=session["user"])
 
-
-# Отправка команды боту
 @app.route("/api/command", methods=["POST"])
 def api_command():
     if not session.get("logged_in"):
@@ -242,37 +245,33 @@ def api_command():
         return jsonify({"status": "error", "message": "Пустая команда"}), 400
 
     try:
-        resp = requests.post("http://127.0.0.1:3001/send", json={"command": cmd}, timeout=5)
+        resp = requests.post(f"{BOT_URL}/send", json={"command": cmd}, timeout=10)
         if resp.status_code == 200:
-            response_text = f"Команда отправлена."
+            response_text = f"Команда отправлена в Minecraft."
         else:
-            response_text = f"Ошибка: {resp.json().get('error', 'Бот не ответил')}"
+            response_text = f"Ошибка бота: {resp.json().get('error', 'Бот не ответил')}"
     except requests.exceptions.ConnectionError:
-        response_text = "Ошибка: Бот не запущен."
+        response_text = "Ошибка: Бот не запущен или недоступен. Проверьте сервис mc-bot на Render."
     except Exception as e:
         response_text = f"Ошибка: {str(e)}"
 
     console_log.append({"command": cmd, "response": response_text})
     return jsonify({"status": "ok", "response": response_text, "command": cmd})
 
-
-# Получение чата для сайта
 @app.route("/api/chat")
 def api_chat():
     if not session.get("logged_in"):
         return jsonify([]), 401
     try:
-        resp = requests.get("http://127.0.0.1:3001/chat", timeout=2)
+        resp = requests.get(f"{BOT_URL}/chat", timeout=10)
         return jsonify(resp.json())
     except:
         return jsonify([])
-
 
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
-
 
 if __name__ == "__main__":
     app.run(debug=False, host="127.0.0.1", port=5000)

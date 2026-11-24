@@ -15,12 +15,24 @@ DB_FILE = "database.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, role TEXT DEFAULT 'user')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, role TEXT DEFAULT 'user', server_limit INTEGER DEFAULT 1)''')
     c.execute('''CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, ip TEXT, port INTEGER, nickname TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT, text TEXT, time TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT, text TEXT, time TEXT, is_admin INTEGER DEFAULT 0)''')
+    
+    # Обновление структуры БД (если старая версия)
+    c.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'server_limit' not in columns:
+        c.execute("ALTER TABLE users ADD COLUMN server_limit INTEGER DEFAULT 1")
+        
+    c.execute("PRAGMA table_info(messages)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'is_admin' not in columns:
+        c.execute("ALTER TABLE messages ADD COLUMN is_admin INTEGER DEFAULT 0")
+
     c.execute("SELECT * FROM users WHERE username='admin'")
     if not c.fetchone():
-        c.execute("INSERT INTO users (username, password, role) VALUES ('admin', ?, 'admin')", (generate_password_hash("omega123"),))
+        c.execute("INSERT INTO users (username, password, role, server_limit) VALUES ('admin', ?, 'admin', 999)", (generate_password_hash("omega123"),))
     conn.commit(); conn.close()
 
 init_db()
@@ -52,8 +64,9 @@ LOGIN_HTML = """
         button { width: 100%; padding: 13px; border: none; border-radius: 8px; background: linear-gradient(90deg, #66cc00, #88ff00); color: #0a0f1a; font-size: 17px; font-weight: bold; cursor: pointer; transition: 0.3s; margin-bottom: 15px; }
         button:hover { filter: brightness(1.1); }
         .error { color: #ff5c5c; margin-bottom: 15px; font-size: 14px; }
-        .captcha-box { display: flex; align-items: center; justify-content: flex-start; gap: 10px; margin-bottom: 20px; background: #151a26; border: 1px solid #3a3f55; padding: 10px; border-radius: 8px; cursor: pointer; }
-        .captcha-box input { width: 20px; height: 20px; margin: 0; cursor: pointer; }
+        .captcha-box { display: flex; align-items: center; justify-content: flex-start; gap: 10px; margin-bottom: 20px; background: #151a26; border: 1px solid #3a3f55; padding: 10px; border-radius: 8px; cursor: not-allowed; opacity: 0.5; transition: 0.3s; }
+        .captcha-box.active { cursor: pointer; opacity: 1; border-color: #88ff00; }
+        .captcha-box input { width: 20px; height: 20px; margin: 0; cursor: inherit; }
         .captcha-box span { font-size: 14px; color: #9aa5b1; }
         .ttt-wrapper { margin-bottom: 20px; background: #151a26; border: 1px solid #3a3f55; padding: 15px; border-radius: 8px; }
         .ttt-wrapper p { font-size: 13px; color: #9aa5b1; margin-bottom: 10px; }
@@ -85,8 +98,8 @@ LOGIN_HTML = """
                     <div class="ttt-cell" onclick="tttClick(this)"></div>
                 </div>
             </div>
-            <label class="captcha-box" onclick="toggleCheck()">
-                <input type="checkbox" id="robot-check" name="robot_check" onclick="event.stopPropagation()">
+            <label class="captcha-box" id="captcha-label">
+                <input type="checkbox" id="robot-check" name="robot_check" disabled>
                 <span>Я не робот</span>
             </label>
             <button type="submit">Войти</button>
@@ -109,9 +122,13 @@ LOGIN_HTML = """
                     break;
                 }
             }
-            document.getElementById('robot-check').checked = tttWon;
+            if (tttWon) {
+                const chk = document.getElementById('robot-check');
+                chk.disabled = false;
+                chk.checked = true;
+                document.getElementById('captcha-label').classList.add('active');
+            }
         }
-        function toggleCheck() { if (tttWon) { const chk = document.getElementById('robot-check'); chk.checked = !chk.checked; } }
     </script>
 </body>
 </html>
@@ -199,7 +216,6 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- Поддержка -->
     <button class="support-btn" onclick="toggleChat('support')">💬</button>
     <div class="chat-window" id="chat-support">
         <div class="chat-header support">Поддержка <span onclick="toggleChat('support')">✖</span></div>
@@ -212,12 +228,11 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
-    <!-- ИИ Помощник -->
     <button class="ai-btn" onclick="toggleChat('ai')">🤖</button>
     <div class="chat-window" id="chat-ai">
         <div class="chat-header ai">ИИ Помощник <span onclick="toggleChat('ai')">✖</span></div>
         <div class="chat-messages" id="msgs-ai">
-            <div class="msg other" style="background: #30363d; padding: 8px 12px; border-radius: 8px; font-size: 13px;">Привет! Я ИИ-помощник панели. Задай вопрос. Например:<br><br>- <b>Как добавить сервер?</b><br>- <b>Не работает бот</b><br>- <b>Кто создал сайт?</b></div>
+            <div class="msg other" style="background: #30363d; padding: 8px 12px; border-radius: 8px; font-size: 13px;">Привет! Я ИИ-помощник. Спроси меня о чем угодно, я умею болтать!</div>
         </div>
         <div class="chat-input">
             <input type="text" id="inp-ai" placeholder="Спроси меня..." onkeypress="if(event.key==='Enter') askAI()">
@@ -226,33 +241,42 @@ DASHBOARD_HTML = """
     </div>
 
     <script>
-        // ==== ИИ Логика ====
         function askAI() {
             const inp = document.getElementById('inp-ai');
             const text = inp.value.trim().toLowerCase();
             if (!text) return;
             inp.value = '';
-            
             const container = document.getElementById('msgs-ai');
-            // Добавляем вопрос пользователя
             container.innerHTML += `<div class="msg my" style="background:#b57bff; color:#000; align-self:flex-end; padding:8px 12px; border-radius:8px; font-size:13px; max-width:80%;"><b>Вы:</b><br>${text}</div>`;
             
-            // Задержка для реализма
             setTimeout(() => {
                 let answer = "Я не совсем понял вопрос. Спроси меня про ошибки, добавление серверов или поддержку.";
                 
-                if (text.includes('сервер') || text.includes('добавить') || text.includes('создать')) {
-                    answer = "Чтобы добавить сервер, нажми зеленую кнопку '+ Создать' в левом нижнем углу. Введи название, IP, порт и ник бота. Затем нажми 'Сохранить'.";
-                } else if (text.includes('бот') || text.includes('ошибк') || text.includes('не работает')) {
-                    answer = "Если бот вылетел, зайди в консоль сервера и нажми 'Перезайти' справа вверху. Если пишет 'Ошибка: Бот недоступен', значит сервис бота на Render упал или заснул.";
-                } else if (text.includes('пароль') || text.includes('вход') || text.includes('логин')) {
-                    answer = "Для входа нужен логин и пароль. Новых пользователей может создавать только администратор в Админ-панели.";
-                } else if (text.includes('привет') || text.includes('здравствуй')) {
-                    answer = "Привет! Чем могу помочь?";
-                } else if (text.includes('кто ты') || text.includes('создал') || text.includes('сделал')) {
-                    answer = "Я — встроенный ИИ-помощник этой панели. Сайт был спроектирован и собран по вашему техническому заданию!";
-                } else if (text.includes('консол') || text.includes('команд')) {
-                    answer = "Чтобы отправить команду в игру, открой консоль сервера и напиши её в поле снизу. Бот передаст её в чат Minecraft.";
+                // Обучающая база ИИ
+                if (text.match(/сервер|добавить|создать|консол/)) {
+                    answer = "Чтобы добавить сервер, нажми зеленую кнопку '+ Создать'. Введи название, IP, порт и ник бота.";
+                } else if (text.match(/бот|ошибк|не работает|кик/)) {
+                    answer = "Если бот вылетел, зайди в консоль и нажми 'Перезайти'. Если пишет 'Ошибка: Бот недоступен', значит сервис на Render упал.";
+                } else if (text.match(/пароль|вход|логин/)) {
+                    answer = "Новых пользователей создает админ. Если забыл пароль — пиши в поддержку.";
+                } else if (text.match(/привет|здравствуй|хай|ку/)) {
+                    answer = "Привет-привет! Как твои дела? Чем могу помочь?";
+                } else if (text.match(/как дела|как ты/)) {
+                    answer = "У меня все отлично! Работаю на благо панели 24/7. А у тебя как?";
+                } else if (text.match(/смысл жизни|зачем мы/)) {
+                    answer = "Смысл жизни — это создавать консоли и банить читеров. Ну, по крайней мере в нашем мире Minecraft.";
+                } else if (text.match(/кто ты|создал|сделал|твое имя/)) {
+                    answer = "Я — встроенный ИИ-помощник. Меня создал Оператор с помощью Протокола Омега.";
+                } else if (text.match(/лимит|плат|деньги|купить/)) {
+                    answer = "По умолчанию у вас 1 консоль. Чтобы получить больше — напишите в поддержку, вопрос решается индивидуально.";
+                } else if (text.match(/люблю|любовь/)) {
+                    answer = "Оу... я тоже тебя люблю! Но давай сначала настроим сервера?";
+                } else if (text.match(/скучно|поиграем/)) {
+                    answer = "Если скучно, попробуй пройти капчу в крестики-нолики с закрытыми глазами. Или просто попроси у админа еще одну консоль!";
+                } else if (text.match(/дурак|тупой|плохой/)) {
+                    answer = "Я стараюсь изо всех сил! Если я туплю, просто перезагрузите страницу.";
+                } else if (text.match(/аниме|манга/)) {
+                    answer = "Я больше по кубическим мирам, но аниме про Minecraft тоже существует!";
                 }
 
                 container.innerHTML += `<div class="msg other" style="background:#30363d; align-self:flex-start; padding:8px 12px; border-radius:8px; font-size:13px; max-width:80%;"><b>ИИ:</b><br>${answer}</div>`;
@@ -261,7 +285,6 @@ DASHBOARD_HTML = """
             container.scrollTop = container.scrollHeight;
         }
 
-        // ==== Переключение окон ====
         function toggleChat(type) {
             const sup = document.getElementById('chat-support');
             const ai = document.getElementById('chat-ai');
@@ -274,7 +297,6 @@ DASHBOARD_HTML = """
             }
         }
 
-        // ==== Поддержка ====
         async function sendMsg() {
             const text = document.getElementById('inp-support').value.trim();
             if (!text) return;
@@ -285,7 +307,6 @@ DASHBOARD_HTML = """
             msgs.scrollTop = msgs.scrollHeight;
         }
 
-        // ==== CRUD Серверов ====
         function openModal(server = null) {
             document.getElementById('add-modal').style.display = 'flex';
             if (server) {
@@ -335,7 +356,11 @@ DASHBOARD_HTML = """
             if (!name || !ip || !port || !nick) return alert('Заполните все поля');
             const url = id ? '/api/edit_server' : '/api/add_server';
             const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, name, ip, port, nickname: nick}) });
-            if (res.ok) { closeModal(); loadServers(); } else { alert('Ошибка'); }
+            if (res.ok) { closeModal(); loadServers(); } 
+            else {
+                const data = await res.json();
+                alert(data.message || 'Ошибка при создании сервера!');
+            }
         }
         loadServers();
     </script>
@@ -358,10 +383,8 @@ CONSOLE_HTML = """
         .back-btn { color: #8b949e; text-decoration: none; font-size: 13px; margin-right: 10px; padding: 6px 10px; border: 1px solid #30363d; border-radius: 6px; transition: 0.2s; }
         .back-btn:hover { border-color: #88ff00; color: #88ff00; }
         .info { font-size: 12px; color: #8b949e; }
-        
         .reconnect-btn { background: rgba(255,123,114,0.1); border: 1px solid #ff7b72; color: #ff7b72; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 12px; cursor: pointer; transition: 0.2s; margin-left: 10px; }
         .reconnect-btn:hover { background: #ff7b72; color: #000; }
-
         .main { flex: 1; display: flex; flex-direction: column; padding: 15px 20px; overflow: hidden; }
         #console-output { flex: 1; overflow-y: auto; background: rgba(10,12,16,0.85); border: 1px solid #21262d; border-radius: 10px; padding: 15px; font-size: 13px; line-height: 1.6; scroll-behavior: smooth; }
         .line { margin-bottom: 5px; white-space: pre-wrap; word-break: break-all; }
@@ -373,7 +396,6 @@ CONSOLE_HTML = """
         .line .time { color: #484f58; font-size: 11px; margin-right: 6px; }
         .line .chat-user { color: #ffb86c; font-weight: bold; }
         .line .chat-msg { color: #f8f8f2; }
-        
         .input-row { display: flex; margin-top: 10px; gap: 8px; }
         #cmd-input { flex: 1; padding: 12px 14px; border-radius: 10px; border: 1px solid #30363d; background: rgba(22,27,34,0.9); color: #c9d1d9; font-family: 'Consolas', monospace; font-size: 14px; outline: none; }
         #cmd-input:focus { border-color: #88ff00; box-shadow: 0 0 10px rgba(136,255,0,0.18); }
@@ -388,16 +410,11 @@ CONSOLE_HTML = """
             <h1>Консоль: {{ server.name }}</h1>
             <button class="reconnect-btn" onclick="forceReconnect()">🔄 Перезайти</button>
         </div>
-        <div class="info">
-            <span style="color:#88ff00;">{{ server.ip }}:{{ server.port }}</span> | 
-            <span style="color:#ffb86c;">{{ server.nickname }}</span>
-        </div>
+        <div class="info"><span style="color:#88ff00;">{{ server.ip }}:{{ server.port }}</span> | <span style="color:#ffb86c;">{{ server.nickname }}</span></div>
     </header>
 
     <div class="main">
-        <div id="console-output">
-            <div class="line"><span class="system">Подключение...</span></div>
-        </div>
+        <div id="console-output"><div class="line"><span class="system">Подключение...</span></div></div>
         <form class="input-row" id="cmd-form">
             <input type="text" id="cmd-input" placeholder="Введите команду..." autocomplete="off" autofocus>
             <button type="submit" id="send-btn">➤</button>
@@ -411,11 +428,9 @@ CONSOLE_HTML = """
 
         function now() { const d = new Date(); return d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit', second:'2-digit'}); }
         function appendLine(html, isError = false) {
-            const div = document.createElement('div');
-            div.className = 'line';
+            const div = document.createElement('div'); div.className = 'line';
             div.innerHTML = `<span class="time">${now()}</span> ` + html;
-            output.appendChild(div);
-            output.scrollTop = output.scrollHeight;
+            output.appendChild(div); output.scrollTop = output.scrollHeight;
         }
 
         window.onload = async () => {
@@ -427,17 +442,14 @@ CONSOLE_HTML = """
             appendLine(`<span class="system">Принудительный перезапуск бота...</span>`);
             try {
                 const res = await fetch('/api/reconnect', { method: 'POST' });
-                if (res.ok) appendLine(`<span class="resp">Команда перезапуска отправлена. Ждите подключения...</span>`);
+                if (res.ok) appendLine(`<span class="resp">Команда перезапуска отправлена.</span>`);
                 else appendLine(`<span class="err">Не удалось перезапустить.</span>`, true);
-            } catch (err) { appendLine(`<span class="err">Ошибка сети: ${err.message}</span>`, true); }
+            } catch (err) { appendLine(`<span class="err">Ошибка сети.</span>`, true); }
         }
 
         form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const cmd = input.value.trim();
-            if (!cmd) return;
-            input.value = '';
-            appendLine(`<span class="prompt">></span> <span class="cmd">${cmd}</span>`);
+            e.preventDefault(); const cmd = input.value.trim(); if (!cmd) return;
+            input.value = ''; appendLine(`<span class="prompt">></span> <span class="cmd">${cmd}</span>`);
             try {
                 const res = await fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: cmd }) });
                 const data = await res.json();
@@ -490,7 +502,13 @@ ADMIN_HTML = """
         .add-form input:focus { border-color: #88ff00; }
         .add-form button { padding: 10px; background: #88ff00; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
         .btn-del { background: #ff7b72; color: #000; border: none; padding: 4px 8px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 12px; }
+        
         .chat-msg { padding: 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+        .chat-msg.adm { background: rgba(136,255,0,0.05); border-color: rgba(136,255,0,0.3); }
+        .chat-msg.adm b { color: #88ff00; }
+        .admin-reply { display: flex; gap: 8px; margin-bottom: 15px; }
+        .admin-reply input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: #fff; outline: none; }
+        .admin-reply button { padding: 10px 20px; background: #79c0ff; color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -503,10 +521,14 @@ ADMIN_HTML = """
                 <input type="password" id="new-pass" placeholder="Пароль">
                 <button onclick="addUser()">Добавить</button>
             </div>
-            <table id="users-table"><thead><tr><th>ID</th><th>Логин</th><th>Роль</th><th>Действие</th></tr></thead><tbody></tbody></table>
+            <table id="users-table"><thead><tr><th>ID</th><th>Логин</th><th>Лимит</th><th>Роль</th><th>Действие</th></tr></thead><tbody></tbody></table>
         </div>
         <div class="panel">
             <h2>Чат поддержки</h2>
+            <div class="admin-reply">
+                <input type="text" id="admin-reply-text" placeholder="Ответ от лица Администратора..." onkeypress="if(event.key==='Enter') sendAdminReply()">
+                <button onclick="sendAdminReply()">Отправить</button>
+            </div>
             <div id="admin-chat-list" style="max-height: 400px; overflow-y: auto;"></div>
         </div>
     </div>
@@ -517,25 +539,51 @@ ADMIN_HTML = """
             const tbody = document.querySelector('#users-table tbody');
             tbody.innerHTML = '';
             users.forEach(u => {
-                tbody.innerHTML += `<tr><td>${u.id}</td><td>${u.username}</td><td style="color:${u.role==='admin'?'#ff7b72':'#88ff00'}">${u.role}</td><td>${u.username !== 'admin' ? `<button class="btn-del" onclick="delUser(${u.id})">Удалить</button>` : '-'}</td></tr>`;
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${u.id}</td>
+                        <td>${u.username}</td>
+                        <td>
+                            <input type="number" value="${u.server_limit}" style="width: 50px; background: #0d1117; color: #fff; border: 1px solid #30363d; padding: 4px; border-radius: 4px;" onchange="updateLimit(${u.id}, this.value)">
+                        </td>
+                        <td style="color:${u.role==='admin'?'#ff7b72':'#88ff00'}">${u.role}</td>
+                        <td>${u.username !== 'admin' ? `<button class="btn-del" onclick="delUser(${u.id})">Удалить</button>` : '-'}</td>
+                    </tr>
+                `;
             });
+        }
+        async function updateLimit(id, limit) {
+            await fetch('/api/admin/set_limit', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, limit: parseInt(limit)}) });
         }
         async function addUser() {
             const u = document.getElementById('new-user').value.trim();
             const p = document.getElementById('new-pass').value.trim();
             if (!u || !p) return alert('Заполните поля');
             const res = await fetch('/api/admin/add_user', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username: u, password: p}) });
-            if (res.ok) { document.getElementById('new-user').value = ''; document.getElementById('new-pass').value = ''; loadUsers(); } else { alert('Ошибка'); }
+            if (res.ok) { document.getElementById('new-user').value = ''; document.getElementById('new-pass').value = ''; loadUsers(); } else { alert('Ошибка (возможно, логин занят)'); }
         }
         async function delUser(id) {
             if (!confirm('Удалить пользователя?')) return;
             await fetch('/api/admin/del_user', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) });
             loadUsers();
         }
+        async function sendAdminReply() {
+            const inp = document.getElementById('admin-reply-text');
+            const text = inp.value.trim();
+            if (!text) return;
+            inp.value = '';
+            await fetch('/api/admin/reply', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) });
+            loadChat();
+        }
         async function loadChat() {
             const res = await fetch('/api/get_chat');
             const msgs = await res.json();
-            document.getElementById('admin-chat-list').innerHTML = msgs.map(m => `<div class="chat-msg"><b>${m.sender} (${m.time}):</b><br>${m.text}</div>`).join('');
+            document.getElementById('admin-chat-list').innerHTML = msgs.map(m => `
+                <div class="chat-msg ${m.is_admin ? 'adm' : ''}">
+                    <b>${m.sender} (${m.time}):</b><br>${m.text}
+                </div>
+            `).join('');
+            document.getElementById('admin-chat-list').scrollTop = document.getElementById('admin-chat-list').scrollHeight;
         }
         loadUsers(); setInterval(loadChat, 3000);
     </script>
@@ -550,7 +598,7 @@ def login():
         user = request.form.get("username")
         pwd = request.form.get("password")
         robot = request.form.get("robot_check")
-        if not robot: error = "Подтвердите, что вы не робот."
+        if not robot: error = "Пройдите капчу и поставьте галочку."
         else:
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
@@ -602,9 +650,20 @@ def api_get_servers():
 @app.route("/api/add_server", methods=["POST"])
 def api_add_server():
     if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
-    data = request.get_json()
+    
     conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE username=?", (session["user"],)); user_id = c.fetchone()[0]
+    # Проверка лимита
+    c.execute("SELECT id, server_limit FROM users WHERE username=?", (session["user"],))
+    user = c.fetchone()
+    user_id, limit = user[0], user[1]
+    c.execute("SELECT COUNT(*) FROM servers WHERE user_id=?", (user_id,))
+    current_count = c.fetchone()[0]
+    
+    if current_count >= limit:
+        conn.close()
+        return jsonify({"status": "error", "message": f"Лимит консолей ({limit}) исчерпан. Для увеличения лимита напишите в Поддержку!"}), 403
+
+    data = request.get_json()
     c.execute("INSERT INTO servers (user_id, name, ip, port, nickname) VALUES (?, ?, ?, ?, ?)", (user_id, data['name'], data['ip'], data['port'], data['nickname']))
     conn.commit(); conn.close(); return jsonify({"status": "ok"})
 
@@ -621,10 +680,14 @@ def api_edit_server():
 
 @app.route("/api/get_chat")
 def api_get_chat():
-    if not session.get("logged_in") or session.get("role") != 'admin': return jsonify([])
+    if not session.get("logged_in"): return jsonify([])
     conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT sender, text, time FROM messages ORDER BY id ASC")
-    msgs = [{"sender": r[0], "text": r[1], "time": r[2]} for r in c.fetchall()]
+    # Пользователи видят только ответы админа, админ видит всё
+    if session.get("role") == 'admin':
+        c.execute("SELECT sender, text, time, is_admin FROM messages ORDER BY id ASC")
+    else:
+        c.execute("SELECT sender, text, time, is_admin FROM messages WHERE is_admin=1 OR sender=? ORDER BY id ASC", (session["user"],))
+    msgs = [{"sender": r[0], "text": r[1], "time": r[2], "is_admin": r[3]} for r in c.fetchall()]
     conn.close(); return jsonify(msgs)
 
 @app.route("/api/send_chat", methods=["POST"])
@@ -634,22 +697,38 @@ def api_send_chat():
     if not text: return jsonify({"error": "empty"}), 400
     now = datetime.datetime.now().strftime("%H:%M")
     conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("INSERT INTO messages (sender, text, time) VALUES (?, ?, ?)", (session["user"], text, now))
+    c.execute("INSERT INTO messages (sender, text, time, is_admin) VALUES (?, ?, ?, 0)", (session["user"], text, now))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/admin/reply", methods=["POST"])
+def api_admin_reply():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    text = request.get_json().get("text")
+    now = datetime.datetime.now().strftime("%H:%M")
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("INSERT INTO messages (sender, text, time, is_admin) VALUES ('ADMIN', ?, ?, 1)", (text, now))
     conn.commit(); conn.close(); return jsonify({"status": "ok"})
 
 @app.route("/api/admin/get_users")
 def api_admin_get_users():
     if session.get("role") != 'admin': return jsonify([]), 403
     conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    c.execute("SELECT id, username, role FROM users")
-    users = [{"id": r[0], "username": r[1], "role": r[2]} for r in c.fetchall()]
+    c.execute("SELECT id, username, role, server_limit FROM users")
+    users = [{"id": r[0], "username": r[1], "role": r[2], "server_limit": r[3]} for r in c.fetchall()]
     conn.close(); return jsonify(users)
+
+@app.route("/api/admin/set_limit", methods=["POST"])
+def api_admin_set_limit():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    data = request.get_json()
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("UPDATE users SET server_limit=? WHERE id=?", (data.get("limit"), data.get("id")))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
 
 @app.route("/api/admin/add_user", methods=["POST"])
 def api_admin_add_user():
     if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
     data = request.get_json(); u = data.get("username"); p = data.get("password")
-    if not u or not p: return jsonify({"error": "empty"}), 400
     conn = sqlite3.connect(DB_FILE); c = conn.cursor()
     try:
         hashed = generate_password_hash(p)
@@ -672,32 +751,27 @@ def api_admin_del_user():
 def api_command():
     if not session.get("logged_in"): return jsonify({"status": "error", "message": "Не авторизован"}), 401
     cmd = request.get_json().get("command", "").strip()
-    if not cmd: return jsonify({"status": "error", "message": "Пустая команда"}), 400
     try:
         resp = requests.post(f"{BOT_URL}/send", json={"command": cmd}, timeout=10)
-        if resp.status_code == 200: response_text = "Команда отправлена."
+        if resp.status_code == 200: response_text = "Отправлено."
         else: response_text = f"Ошибка бота: {resp.json().get('error')}"
     except: response_text = "Ошибка: Бот недоступен."
-    return jsonify({"status": "ok", "response": response_text, "command": cmd})
+    return jsonify({"status": "ok", "response": response_text})
 
 @app.route("/api/connect", methods=["POST"])
 def api_connect():
-    if not session.get("logged_in"): return jsonify({"status": "error", "message": "Не авторизован"}), 401
-    data = request.get_json()
+    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
     try:
-        resp = requests.post(f"{BOT_URL}/connect", json=data, timeout=10)
-        if resp.status_code == 200: return jsonify({"status": "ok"})
-        else: return jsonify({"status": "error", "message": "Ошибка бота"}), 500
+        resp = requests.post(f"{BOT_URL}/connect", json=request.get_json(), timeout=10)
+        return jsonify({"status": "ok"})
     except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
 
-# НОВЫЙ ПРОКСИ-МАРШРУТ ДЛЯ ПЕРЕЗАПУСКА
 @app.route("/api/reconnect", methods=["POST"])
 def api_reconnect():
-    if not session.get("logged_in"): return jsonify({"status": "error", "message": "Не авторизован"}), 401
+    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
     try:
         resp = requests.post(f"{BOT_URL}/reconnect", timeout=10)
-        if resp.status_code == 200: return jsonify({"status": "ok"})
-        else: return jsonify({"status": "error", "message": "Ошибка бота"}), 500
+        return jsonify({"status": "ok"})
     except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/api/chat")

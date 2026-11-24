@@ -3,38 +3,40 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 
+// Настройки по умолчанию
 let currentConfig = {
     host: 'mc.hypemc.pro',
     port: 25565,
-    username: 'ТВОЙ_НИК',
+    username: 'MechtaAdm', // Твой ник
     auth: 'offline',
-    version: '1.21.11' // Автоопределение
+    version: '1.21.11',    // Жестко заданная версия
 };
 
 let bot = null;
 let chatLog = [];
 let lastMessage = "";
+let reconnectTimeout = null;
+let afkInterval = null;
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
+// API для получения данных с сайта
 app.post('/connect', (req, res) => {
     const { host, port, username } = req.body;
     if (host) currentConfig.host = host;
     if (port) currentConfig.port = parseInt(port);
     if (username) currentConfig.username = username;
 
-    if (bot) { try { bot.quit(); } catch(e){} bot = null; }
-    chatLog.push({ type: 'system', text: `Переподключение к ${currentConfig.host}...` });
-    setTimeout(() => createBot(), 1000);
+    chatLog.push({ type: 'system', text: `Запрос на подключение к ${currentConfig.host}...` });
+    startBot();
     res.json({ status: 'ok' });
 });
 
 app.post('/reconnect', (req, res) => {
-    if (bot) { try { bot.quit(); } catch(e){} bot = null; }
     chatLog.push({ type: 'system', text: `Принудительный перезапуск...` });
-    setTimeout(() => createBot(), 1000);
+    startBot();
     res.json({ status: 'ok' });
 });
 
@@ -50,40 +52,80 @@ app.post('/send', (req, res) => {
 app.get('/chat', (req, res) => { res.json(chatLog.slice(-100)); });
 app.get('/health', (req, res) => { res.send('OK'); });
 
-app.listen(process.env.PORT || 3001, () => { console.log('=== БОТ ЗАПУЩЕН ==='); });
+// Запуск веб-сервера для Render
+app.listen(process.env.PORT || 3001, () => { console.log('=== СЕРВЕР БОТА ЗАПУЩЕН ==='); });
 
-function createBot() {
-    if (bot) { try { bot.quit(); } catch(e){} }
+// Функция запуска бота (с защитой от дублирования)
+function startBot() {
+    // Очищаем старые таймеры и отключаем текущего бота
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    if (afkInterval) clearInterval(afkInterval);
+    if (bot) {
+        try { bot.quit(); } catch(e){}
+        bot = null;
+    }
+
     console.log(`[BOT] Подключение к ${currentConfig.host}:${currentConfig.port}...`);
-    
-    bot = mineflayer.createBot(currentConfig);
-    
+    chatLog.push({ type: 'system', text: `Подключение к ${currentConfig.host}...` });
+
+    try {
+        bot = mineflayer.createBot(currentConfig);
+    } catch (err) {
+        console.log(`[BOT] Ошибка создания: ${err.message}`);
+        chatLog.push({ type: 'system', text: `Ошибка создания бота: ${err.message}` });
+        return;
+    }
+
+    // Успешный вход
     bot.on('spawn', () => {
-        console.log(`[BOT] ЗАШЕЛ НА СЕРВЕР как ${bot.username}`);
-        chatLog.push({ type: 'system', text: `Бот ${bot.username} зашел на сервер` });
+        console.log(`[BOT] УСПЕШНО ЗАШЕЛ КАК ${bot.username}`);
+        chatLog.push({ type: 'system', text: `Бот ${bot.username} успешно зашел на сервер` });
+
+        // Простая имитация активности, чтобы не выкинуло за АФК
+        afkInterval = setInterval(() => {
+            if (bot && bot.entity) {
+                // Прыжок
+                bot.setControlState('jump', true);
+                setTimeout(() => { if(bot) bot.setControlState('jump', false); }, 500);
+                // Поворот головы
+                bot.look(Math.random() * Math.PI * 2, 0, false);
+            }
+        }, 5000);
     });
-    
+
+    // Ловим чат
     bot.on('messagestr', (message) => {
         if (message === lastMessage) return;
         lastMessage = message;
         chatLog.push({ type: 'chat', username: 'Сервер', text: message });
     });
-    
-    bot.on('error', (err) => { 
+
+    // Ловим ошибки
+    bot.on('error', (err) => {
         console.log(`[BOT] Ошибка: ${err.message}`);
-        chatLog.push({ type: 'system', text: `Ошибка: ${err.message}` }); 
+        chatLog.push({ type: 'system', text: `Ошибка: ${err.message}` });
     });
-    
-    bot.on('kicked', (reason) => { 
+
+    // Ловим кик
+    bot.on('kicked', (reason) => {
         let reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : reason;
         console.log(`[BOT] КИКНУТ: ${reasonStr}`);
-        chatLog.push({ type: 'system', text: `КИКНУТ: ${reasonStr}` }); 
+        chatLog.push({ type: 'system', text: `Бот кикнут: ${reasonStr}` });
     });
-    
+
+    // Переподключение при обрыве связи
     bot.on('end', () => {
-        chatLog.push({ type: 'system', text: `Бот отключен. Перезаход через 10 сек...` });
-        setTimeout(createBot, 10000);
+        console.log(`[BOT] Отключен от сервера.`);
+        chatLog.push({ type: 'system', text: `Бот отключен. Перезаход через 15 секунд...` });
+        
+        if (afkInterval) clearInterval(afkInterval);
+        
+        // Перезаходим только через 15 секунд, чтобы не забанили
+        reconnectTimeout = setTimeout(() => {
+            startBot();
+        }, 15000);
     });
 }
 
-createBot();
+// Первый запуск при старте сервера
+startBot();

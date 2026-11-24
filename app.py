@@ -409,4 +409,306 @@ ADMIN_HTML = """
         if (users.length === 0) { list.innerHTML = '<div style="padding: 15px; color: #8b949e; font-size: 13px;">Нет сообщений</div>'; return; }
         users.forEach(u => {
             const div = document.createElement('div'); div.className = `user-item ${currentRecipient === u ? 'active' : ''}`; div.innerText = u;
-            div.onclick = () => { currentRecipient =
+            div.onclick = () => { currentRecipient = u; loadChatUsers(); loadChatMessages(); }; list.appendChild(div);
+        });
+    }
+    async function loadChatMessages() {
+        if (!currentRecipient) return;
+        document.getElementById('chat-header').innerText = `Чат с ${currentRecipient}`;
+        const res = await fetch(`/api/admin/get_messages?user=${currentRecipient}`); const msgs = await res.json();
+        const box = document.getElementById('admin-chat-messages');
+        box.innerHTML = msgs.map(m => `<div class="msg ${m.is_admin ? 'adm' : 'usr'}">${m.text} <span style="font-size:10px; opacity:0.6;">${m.time}</span></div>`).join('');
+        box.scrollTop = box.scrollHeight;
+    }
+    async function sendAdminReply() {
+        if (!currentRecipient) return alert('Выберите чат!');
+        const inp = document.getElementById('admin-reply-text'); const text = inp.value.trim();
+        if (!text) return; inp.value = '';
+        await fetch('/api/admin/reply', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({recipient: currentRecipient, text}) });
+        loadChatMessages();
+    }
+    loadUsers(); loadServices(); loadChatUsers(); setInterval(() => { loadChatUsers(); if(currentRecipient) loadChatMessages(); }, 3000);
+</script>
+{% endblock %}
+"""
+
+CONSOLE_HTML = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Консоль — {{ server.name }}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { height: 100vh; display: flex; flex-direction: column; font-family: 'Consolas', monospace; background: #0a0c10; color: #c9d1d9; overflow: hidden; }
+        header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; }
+        .back-btn { color: #8b949e; text-decoration: none; margin-right: 15px; padding: 6px 10px; border: 1px solid #30363d; border-radius: 6px; font-size: 13px; }
+        .back-btn:hover { border-color: #88ff00; color: #88ff00; }
+        .reconnect-btn { background: none; border: 1px solid #ff7b72; color: #ff7b72; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: 10px; font-size: 12px; }
+        .main { flex: 1; padding: 15px; display: flex; flex-direction: column; }
+        #console-output { flex: 1; overflow-y: auto; background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 15px; font-size: 13px; line-height: 1.6; }
+        .line { margin-bottom: 5px; word-break: break-all; }
+        .line .time { color: #484f58; font-size: 11px; margin-right: 6px; }
+        .line .system { color: #8b949e; font-style: italic; }
+        .line .chat-user { color: #ffb86c; font-weight: bold; }
+        .line .chat-msg { color: #f8f8f2; }
+        .input-row { display: flex; margin-top: 10px; gap: 8px; }
+        #cmd-input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #30363d; background: #161b22; color: #fff; outline: none; }
+        #cmd-input:focus { border-color: #88ff00; }
+        #send-btn { padding: 0 20px; background: #88ff00; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <header>
+        <div style="display:flex; align-items:center;">
+            <a href="/dashboard" class="back-btn">← Назад</a>
+            <b style="color:#fff;">Консоль: {{ server.name }}</b>
+            <button class="reconnect-btn" onclick="forceReconnect()">🔄 Перезайти</button>
+        </div>
+        <div style="font-size: 12px; color: #8b949e;"><span style="color:#88ff00;">{{ server.ip }}:{{ server.port }}</span> | <span style="color:#ffb86c;">{{ server.nickname }}</span></div>
+    </header>
+    <div class="main">
+        <div id="console-output"><div class="line"><span class="system">Подключение...</span></div></div>
+        <form class="input-row" id="cmd-form">
+            <input type="text" id="cmd-input" placeholder="Введите команду..." autocomplete="off" autofocus>
+            <button type="submit" id="send-btn">➤</button>
+        </form>
+    </div>
+    <script>
+        const output = document.getElementById('console-output');
+        const form = document.getElementById('cmd-form');
+        const input = document.getElementById('cmd-input');
+        let lastChatLength = -1;
+        function now() { return new Date().toLocaleTimeString('ru-RU'); }
+        function appendLine(html) { output.innerHTML += `<div class="line"><span class="time">${now()}</span> ${html}</div>`; output.scrollTop = output.scrollHeight; }
+        window.onload = async () => { await fetch('/api/connect', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ host: "{{ server.ip }}", port: "{{ server.port }}", username: "{{ server.nickname }}" }) }); };
+        async function forceReconnect() { appendLine(`<span class="system">Перезапуск...</span>`); await fetch('/api/reconnect', { method: 'POST' }); }
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault(); const cmd = input.value.trim(); if (!cmd) return;
+            input.value = ''; appendLine(`<span style="color:#88ff00;">></span> <span style="color:#79c0ff;">${cmd}</span>`);
+            await fetch('/api/command', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd}) });
+        });
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/chat'); const messages = await res.json();
+                if (messages.length > lastChatLength) {
+                    let newMsgs = lastChatLength === -1 ? [] : messages.slice(lastChatLength);
+                    newMsgs.forEach(m => appendLine(`<span class="chat-user">[${m.username}]</span> <span class="chat-msg">${m.text}</span>`));
+                    lastChatLength = messages.length;
+                }
+            } catch(e){}
+        }, 1000);
+    </script>
+</body>
+</html>
+"""
+
+# ==========================================
+# МАРШРУТЫ FLASK
+# ==========================================
+@app.route("/", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        user = request.form.get("username"); pwd = request.form.get("password"); robot = request.form.get("robot_check")
+        if not robot: error = "Пройдите капчу."
+        else:
+            conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE username=?", (user,)); row = c.fetchone(); conn.close()
+            if row and check_password_hash(row[2], pwd):
+                session.clear(); session["logged_in"] = True; session["auth_ok"] = True; session["user"] = row[1]; session["role"] = row[3]
+                return redirect(url_for("dashboard"))
+            else: error = "Неверный логин или пароль"
+    return render_template_string(LOGIN_HTML, error=error)
+
+@app.route("/dashboard")
+def dashboard(): return render_template_string(BASE_LAYOUT.replace("{% block title %}", "Сервера").replace("{% block header_title %}", "Мои сервера").replace("{% block content %}", DASHBOARD_HTML.split("{% block content %}")[1].split("{% endblock %}")[0]).replace("{% block scripts %}", DASHBOARD_HTML.split("{% block scripts %}")[1].split("{% endblock %}")[0]).replace("{% block head %}", "").replace("{% endblock %}", ""), active_tab='servers', user=session["user"], role=session["role"])
+
+@app.route("/services")
+def services(): return render_template_string(BASE_LAYOUT.replace("{% block title %}", "Услуги").replace("{% block header_title %}", "Тарифы и Услуги").replace("{% block content %}", SERVICES_HTML.split("{% block content %}")[1].split("{% endblock %}")[0]).replace("{% block scripts %}", SERVICES_HTML.split("{% block scripts %}")[1].split("{% endblock %}")[0]).replace("{% block head %}", "").replace("{% endblock %}", ""), active_tab='services', user=session["user"], role=session["role"])
+
+@app.route("/admin")
+def admin():
+    if session.get("role") != 'admin': return "Доступ запрещен", 403
+    return render_template_string(BASE_LAYOUT.replace("{% block title %}", "Админка").replace("{% block header_title %}", "Админ-панель").replace("{% block content %}", ADMIN_HTML.split("{% block content %}")[1].split("{% endblock %}")[0]).replace("{% block scripts %}", ADMIN_HTML.split("{% block scripts %}")[1].split("{% endblock %}")[0]).replace("{% block head %}", ADMIN_HTML.split("{% block head %}")[1].split("{% endblock %}")[0]).replace("{% endblock %}", ""), active_tab='admin', user=session["user"], role=session["role"])
+
+@app.route("/console/<int:server_id>")
+def server_console(server_id):
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    if session["role"] == 'admin': c.execute("SELECT id, name, ip, port, nickname FROM servers WHERE id=?", (server_id,))
+    else: c.execute("SELECT id, name, ip, port, nickname FROM servers WHERE id=? AND user_id=(SELECT id FROM users WHERE username=?)", (server_id, session["user"]))
+    server = c.fetchone(); conn.close()
+    if not server: return "Сервер не найден", 403
+    return render_template_string(CONSOLE_HTML, server={"id": server[0], "name": server[1], "ip": server[2], "port": server[3], "nickname": server[4]})
+
+@app.route("/logout")
+def logout(): session.clear(); return redirect(url_for("login"))
+
+# === API ===
+@app.route("/api/get_servers")
+def api_get_servers():
+    if not session.get("logged_in"): return jsonify([])
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    if session["role"] == 'admin': c.execute("SELECT id, name, ip, port, nickname FROM servers")
+    else: c.execute("SELECT id, name, ip, port, nickname FROM servers WHERE user_id=(SELECT id FROM users WHERE username=?)", (session["user"],))
+    servers = [{"id": r[0], "name": r[1], "ip": r[2], "port": r[3], "nickname": r[4]} for r in c.fetchall()]
+    conn.close(); return jsonify(servers)
+
+@app.route("/api/add_server", methods=["POST"])
+def api_add_server():
+    if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("SELECT id, server_limit FROM users WHERE username=?", (session["user"],)); user = c.fetchone()
+    user_id, limit = user[0], user[1]
+    c.execute("SELECT COUNT(*) FROM servers WHERE user_id=?", (user_id,)); current_count = c.fetchone()[0]
+    if current_count >= limit: conn.close(); return jsonify({"status": "error", "message": f"Лимит консолей ({limit}) исчерпан. Напишите в Поддержку!"}), 403
+    data = request.get_json()
+    c.execute("INSERT INTO servers (user_id, name, ip, port, nickname) VALUES (?, ?, ?, ?, ?)", (user_id, data['name'], data['ip'], data['port'], data['nickname']))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/edit_server", methods=["POST"])
+def api_edit_server():
+    if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
+    data = request.get_json(); sid = data.get("id")
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    if session["role"] != 'admin':
+        c.execute("SELECT id FROM servers WHERE id=? AND user_id=(SELECT id FROM users WHERE username=?)", (sid, session["user"]))
+        if not c.fetchone(): conn.close(); return jsonify({"error": "access denied"}), 403
+    c.execute("UPDATE servers SET name=?, ip=?, port=?, nickname=? WHERE id=?", (data['name'], data['ip'], data['port'], data['nickname'], sid))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/services")
+def api_services():
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("SELECT id, name, price, description FROM services")
+    services = [{"id": r[0], "name": r[1], "price": r[2], "description": r[3]} for r in c.fetchall()]
+    conn.close(); return jsonify(services)
+
+@app.route("/api/get_chat")
+def api_get_chat():
+    if not session.get("logged_in"): return jsonify([])
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    if session.get("role") == 'admin': c.execute("SELECT sender, text, time, is_admin FROM messages ORDER BY id ASC")
+    else: c.execute("SELECT sender, text, time, is_admin FROM messages WHERE recipient=? OR (sender=? AND is_admin=0) ORDER BY id ASC", (session["user"], session["user"]))
+    msgs = [{"sender": r[0], "text": r[1], "time": r[2], "is_admin": r[3]} for r in c.fetchall()]
+    conn.close(); return jsonify(msgs)
+
+@app.route("/api/send_chat", methods=["POST"])
+def api_send_chat():
+    if not session.get("logged_in"): return jsonify({"error": "no auth"}), 401
+    text = request.get_json().get("text"); now = datetime.datetime.now().strftime("%H:%M")
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("INSERT INTO messages (sender, recipient, text, time, is_admin) VALUES (?, 'ADMIN', ?, ?, 0)", (session["user"], text, now))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/admin/get_chat_users")
+def api_admin_get_chat_users():
+    if session.get("role") != 'admin': return jsonify([]), 403
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("SELECT DISTINCT sender FROM messages WHERE is_admin=0")
+    users = [r[0] for r in c.fetchall()]
+    conn.close(); return jsonify(users)
+
+@app.route("/api/admin/get_messages")
+def api_admin_get_messages():
+    if session.get("role") != 'admin': return jsonify([]), 403
+    user = request.args.get('user')
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("SELECT sender, text, time, is_admin FROM messages WHERE sender=? OR recipient=? ORDER BY id ASC", (user, user))
+    msgs = [{"sender": r[0], "text": r[1], "time": r[2], "is_admin": r[3]} for r in c.fetchall()]
+    conn.close(); return jsonify(msgs)
+
+@app.route("/api/admin/reply", methods=["POST"])
+def api_admin_reply():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    data = request.get_json(); now = datetime.datetime.now().strftime("%H:%M")
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("INSERT INTO messages (sender, recipient, text, time, is_admin) VALUES ('ADMIN', ?, ?, ?, 1)", (data.get('recipient'), data.get('text'), now))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/admin/get_users")
+def api_admin_get_users():
+    if session.get("role") != 'admin': return jsonify([]), 403
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("SELECT id, username, server_limit FROM users")
+    users = [{"id": r[0], "username": r[1], "server_limit": r[2]} for r in c.fetchall()]
+    conn.close(); return jsonify(users)
+
+@app.route("/api/admin/set_limit", methods=["POST"])
+def api_admin_set_limit():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    data = request.get_json()
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("UPDATE users SET server_limit=? WHERE id=?", (data.get("limit"), data.get("id")))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/admin/add_user", methods=["POST"])
+def api_admin_add_user():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    data = request.get_json()
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    try:
+        c.execute("INSERT INTO users (username, password, role, server_limit) VALUES (?, ?, 'user', 1)", (data['username'], generate_password_hash(data['password'])))
+        conn.commit()
+    except sqlite3.IntegrityError: return jsonify({"error": "exists"}), 400
+    finally: conn.close()
+    return jsonify({"status": "ok"})
+
+@app.route("/api/admin/del_user", methods=["POST"])
+def api_admin_del_user():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    uid = request.get_json().get("id")
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("DELETE FROM users WHERE id=?", (uid,))
+    c.execute("DELETE FROM servers WHERE user_id=?", (uid,))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/admin/add_service", methods=["POST"])
+def api_admin_add_service():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    data = request.get_json()
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("INSERT INTO services (name, price, description) VALUES (?, ?, ?)", (data['name'], data['price'], data['description']))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/admin/del_service", methods=["POST"])
+def api_admin_del_service():
+    if session.get("role") != 'admin': return jsonify({"error": "no auth"}), 403
+    sid = request.get_json().get("id")
+    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+    c.execute("DELETE FROM services WHERE id=?", (sid,))
+    conn.commit(); conn.close(); return jsonify({"status": "ok"})
+
+@app.route("/api/command", methods=["POST"])
+def api_command():
+    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
+    try:
+        requests.post(f"{BOT_URL}/send", json={"command": request.get_json().get("command")}, timeout=10)
+        return jsonify({"status": "ok"})
+    except: return jsonify({"status": "ok"})
+
+@app.route("/api/connect", methods=["POST"])
+def api_connect():
+    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
+    try: requests.post(f"{BOT_URL}/connect", json=request.get_json(), timeout=10)
+    except: pass
+    return jsonify({"status": "ok"})
+
+@app.route("/api/reconnect", methods=["POST"])
+def api_reconnect():
+    if not session.get("logged_in"): return jsonify({"status": "error"}), 401
+    try: requests.post(f"{BOT_URL}/reconnect", timeout=10)
+    except: pass
+    return jsonify({"status": "ok"})
+
+@app.route("/api/chat")
+def api_chat():
+    if not session.get("logged_in"): return jsonify([]), 401
+    try:
+        resp = requests.get(f"{BOT_URL}/chat", timeout=10)
+        return jsonify(resp.json())
+    except: return jsonify([])
+
+if __name__ == "__main__":
+    app.run(debug=False, host="127.0.0.1", port=5000)

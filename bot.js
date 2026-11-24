@@ -8,7 +8,7 @@ let currentConfig = {
     port: 25565,
     username: 'ТВОЙ_НИК',
     auth: 'offline',
-    version: 1.21.11 // Автоопределение
+    version: '1.21.11' // Автоопределение
 };
 
 let bot = null;

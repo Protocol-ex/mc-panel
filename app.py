@@ -484,7 +484,11 @@ def server_console(server_id):
         header {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; }}
         .back-btn {{ color: #8b949e; text-decoration: none; margin-right: 15px; padding: 6px 10px; border: 1px solid #30363d; border-radius: 6px; font-size: 13px; }}
         .back-btn:hover {{ border-color: #88ff00; color: #88ff00; }}
-        .reconnect-btn {{ background: none; border: 1px solid #ff7b72; color: #ff7b72; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: 10px; font-size: 12px; }}
+        .btn-action {{ background: none; border: 1px solid #ff7b72; color: #ff7b72; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: 10px; font-size: 12px; font-weight: bold; transition: 0.2s; }}
+        .btn-action:hover {{ background: rgba(255,123,114,0.1); }}
+        .btn-pause {{ border-color: #79c0ff; color: #79c0ff; }}
+        .btn-pause:hover {{ background: rgba(121,192,255,0.1); }}
+        .btn-pause.muted {{ border-color: #88ff00; color: #88ff00; background: rgba(136,255,0,0.1); }}
         .main {{ flex: 1; padding: 15px; display: flex; flex-direction: column; }}
         #console-output {{ flex: 1; overflow-y: auto; background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 15px; font-size: 13px; line-height: 1.6; }}
         .line {{ margin-bottom: 5px; word-break: break-all; }}
@@ -502,7 +506,8 @@ def server_console(server_id):
             <div style="display:flex; align-items:center;">
                 <a href="/dashboard" class="back-btn">← Назад</a>
                 <b style="color:#fff;">Консоль: {server[1]}</b>
-                <button class="reconnect-btn" onclick="forceReconnect()">🔄 Перезайти</button>
+                <button class="btn-action" onclick="forceReconnect()">🔄 Перезайти</button>
+                <button class="btn-action btn-pause" id="btn-mute" onclick="toggleMute()">⏸ Пауза</button>
             </div>
             <div style="font-size: 12px; color: #8b949e;"><span style="color:#88ff00;">{server[2]}:{server[3]}</span> | <span style="color:#ffb86c;">{server[4]}</span></div>
         </header>
@@ -518,15 +523,46 @@ def server_console(server_id):
             const form = document.getElementById('cmd-form');
             const input = document.getElementById('cmd-input');
             let lastChatLength = -1;
+            let isMuted = false;
+            let mutedMessages = [];
+
             function now() {{ return new Date().toLocaleTimeString('ru-RU'); }}
-            function appendLine(html) {{ output.innerHTML += `<div class="line"><span class="time">${{now()}}</span> ${{html}}</div>`; output.scrollTop = output.scrollHeight; }}
+            
+            function appendLine(html) {{
+                if (isMuted) {{
+                    mutedMessages.push(html);
+                }} else {{
+                    output.innerHTML += `<div class="line"><span class="time">${{now()}}</span> ${{html}}</div>`;
+                    output.scrollTop = output.scrollHeight;
+                }}
+            }}
+
+            function toggleMute() {{
+                isMuted = !isMuted;
+                const btn = document.getElementById('btn-mute');
+                if (isMuted) {{
+                    btn.innerHTML = "▶ Продолжить";
+                    btn.classList.add('muted');
+                }} else {{
+                    btn.innerHTML = "⏸ Пауза";
+                    btn.classList.remove('muted');
+                    mutedMessages.forEach(msg => {{
+                        output.innerHTML += `<div class="line"><span class="time">${{now()}}</span> ${{msg}}</div>`;
+                    }});
+                    mutedMessages = [];
+                    output.scrollTop = output.scrollHeight;
+                }}
+            }}
+
             window.onload = async () => {{ await fetch('/api/connect', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ host: "{server[2]}", port: "{server[3]}", username: "{server[4]}" }}) }}); }};
             async function forceReconnect() {{ appendLine(`<span class="system">Перезапуск...</span>`); await fetch('/api/reconnect', {{ method: 'POST' }}); }}
+            
             form.addEventListener('submit', async (e) => {{
                 e.preventDefault(); const cmd = input.value.trim(); if (!cmd) return;
                 input.value = ''; appendLine(`<span style="color:#88ff00;">></span> <span style="color:#79c0ff;">${{cmd}}</span>`);
                 await fetch('/api/command', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{command: cmd}}) }});
             }});
+
             setInterval(async () => {{
                 try {{
                     const res = await fetch('/api/chat'); const messages = await res.json();
